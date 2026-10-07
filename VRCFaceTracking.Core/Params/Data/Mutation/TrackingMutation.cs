@@ -26,6 +26,11 @@ public abstract partial class TrackingMutation
     [JsonIgnore]
     public abstract string Description { get; }
     public abstract MutationPriority Step { get; }
+    /// <summary>
+    /// Adaptive-calibration fork: run order within a <see cref="Step"/>, lower runs first. Ties keep discovery order.
+    /// </summary>
+    [JsonIgnore]
+    public virtual int Order => 0;
     [JsonIgnore]
     public ObservableCollection<IMutationComponent> Components { get; set; }
     public virtual bool IsSaved { get; } = false;

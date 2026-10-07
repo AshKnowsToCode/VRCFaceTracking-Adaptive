@@ -22,6 +22,16 @@ public partial class UnifiedTrackingMutator : ObservableObject
     private UnifiedTrackingData _inputBuffer;
     public ObservableCollection<TrackingMutation> _mutations = new();
 
+    // Adaptive-calibration fork: discovery index of each loaded mutation, the last tie-breaker of the run order.
+    private readonly Dictionary<TrackingMutation, int> _discoveryIndex = new();
+
+    /// <summary>
+    /// Adaptive-calibration fork: module identity for mutations (e.g. per-module calibration priors). Set by
+    /// MainStandalone before <see cref="Load"/>; not constructor-injected because
+    /// ILibManager -> SendCoordinator -> ParameterSenderService -> this mutator would be a DI cycle.
+    /// </summary>
+    public ILibManager? LibManager { get; set; }
+
     public UnifiedTrackingMutator(ILogger<UnifiedTrackingMutator> logger, ILocalSettingsService localSettingsService)
     {
         UnifiedTracking.Mutator = this;
@@ -50,6 +60,15 @@ public partial class UnifiedTrackingMutator : ObservableObject
             foreach (var mutator in _mutations.Where(m => m.IsActive))
             {
                 mutator.MutateData(ref _inputBuffer);
+            }
+
+            // Adaptive-calibration fork: second tap on the final output (the session recorder's "out" block).
+            foreach (var mutation in _mutations)
+            {
+                if (mutation.IsActive && mutation is IMutationOutputObserver observer)
+                {
+                    observer.OnMutationsApplied(_inputBuffer);
+                }
             }
         }
 
@@ -93,12 +112,14 @@ public partial class UnifiedTrackingMutator : ObservableObject
         _logger.LogDebug("Mutations initialized successfully.");
     }
     
-    private async void CreateMutation(TrackingMutation mutation) 
+    // Adaptive-calibration fork: settings reads finish in any order, so each mutation is initialised and inserted in
+    // run order as it arrives instead of appended (Step order was not guaranteed and a single Initialize() pass at
+    // the end of Load could run before the list was complete).
+    private async Task CreateMutation(TrackingMutation mutation, int discoveryIndex)
     {
+        _logger.LogInformation($"Loading {mutation.Name}");
         try
         {
-            _logger.LogInformation($"Loading {mutation.Name}");
-
             Type mutationType = mutation.GetType();
 
             MethodInfo readSettingMethod = typeof(ILocalSettingsService)
@@ -111,22 +132,45 @@ public partial class UnifiedTrackingMutator : ObservableObject
             PropertyInfo resultProperty = task.GetType().GetProperty("Result");
             var typedMutation = resultProperty.GetValue(task);
 
-            mutation = (TrackingMutation)typedMutation;
-
-            mutation.Logger = _logger;
-            mutation.LocalSettingsService =  _localSettingsService;
-            mutation.CreateProperties();
-            lock (_mutationsLock) _mutations.Add(mutation);
+            mutation = (TrackingMutation)typedMutation ?? mutation;
         }
         catch (Exception ex)
         {
             _logger.LogError($"Creating new mutation data. {ex.Message}");
-            mutation.Logger = _logger;
-            mutation.LocalSettingsService =  _localSettingsService;
-            mutation.CreateProperties();
-            lock (_mutationsLock) _mutations.Add(mutation);
         }
+
+        mutation.Logger = _logger;
+        mutation.LocalSettingsService =  _localSettingsService;
+        mutation.CreateProperties();
+
+        try
+        {
+            _logger.LogInformation($"Initializing {mutation.Name}");
+            mutation.Initialize(UnifiedTracking.Data);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Failed to initialize {mutation.Name}");
+        }
+
+        lock (_mutationsLock) InsertInRunOrder(mutation, discoveryIndex);
     }
+
+    // Adaptive-calibration fork: run order is (Step, Order, discovery index). Caller holds _mutationsLock.
+    private void InsertInRunOrder(TrackingMutation mutation, int discoveryIndex)
+    {
+        _discoveryIndex[mutation] = discoveryIndex;
+        var key = RunOrderKey(mutation);
+        var index = _mutations.Count;
+        while (index > 0 && RunOrderKey(_mutations[index - 1]).CompareTo(key) > 0)
+        {
+            index--;
+        }
+        _mutations.Insert(index, mutation);
+    }
+
+    private (MutationPriority, int, int) RunOrderKey(TrackingMutation mutation) =>
+        (mutation.Step, mutation.Order, _discoveryIndex.GetValueOrDefault(mutation));
 
     public async void Load()
     {
@@ -135,15 +179,13 @@ public partial class UnifiedTrackingMutator : ObservableObject
         var mutations = TrackingMutation.GetImplementingMutations(true);
         await _localSettingsService.Load(this);
 
+        // Adaptive-calibration fork: CreateMutation initialises each mutation itself (see above).
+        await Task.WhenAll(mutations.Select(CreateMutation));
+
         lock (_mutationsLock)
         {
-            foreach (var mutation in mutations)
-            {
-                CreateMutation(mutation);
-            }
+            _logger.LogInformation("Mutation run order: " + string.Join(" > ", _mutations.Select(m => m.Name)));
         }
-
         _logger.LogDebug("Mutation data loaded.");
-        Initialize();
     }
 }

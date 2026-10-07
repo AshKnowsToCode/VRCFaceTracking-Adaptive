@@ -24,9 +24,18 @@ public class MutatorViewModel : ObservableRecipient
     {
         Dispatcher.UIThread.Post(() =>
         {
+            // Adaptive-calibration fork: mirror the source position so the page lists mutations in run order.
             if (e.NewItems != null)
+            {
+                var index = e.NewStartingIndex;
                 foreach (TrackingMutation m in e.NewItems)
-                    Mutations.Add(m);
+                {
+                    if (index >= 0 && index <= Mutations.Count)
+                        Mutations.Insert(index++, m);
+                    else
+                        Mutations.Add(m);
+                }
+            }
 
             if (e.OldItems != null)
                 foreach (TrackingMutation m in e.OldItems)

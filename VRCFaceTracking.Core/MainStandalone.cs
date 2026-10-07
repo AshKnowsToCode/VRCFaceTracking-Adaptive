@@ -66,6 +66,8 @@ public class MainStandalone : IMainService
                     "If parameters do not update, please restart VRChat or manually enable OSC yourself in your avatar's expressions menu.");
         }
 
+        // Adaptive-calibration fork: give mutations module identity (see UnifiedTrackingMutator.LibManager).
+        _mutator.LibManager = _libManager;
         _mutator.Load();
 
         if (isWindows)
