@@ -5,17 +5,23 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using VRCFaceTracking.Core.Contracts.Services;
 using VRCFaceTracking.Core.Params.Expressions;
 
 namespace VRCFaceTracking.Core.Params.Data.Mutation;
 public class Filter : TrackingMutation
 {
+    // Adaptive-calibration fork: Json.NET skips static fields unless they are marked [JsonProperty], so these sliders
+    // were never saved and reset to their defaults on every start.
     [MutationProperty("Minimum Cutoff", true, 0f, 2f)]
+    [JsonProperty]
     public static float minCutoff = 1f;
     [MutationProperty("Beta", true)]
+    [JsonProperty]
     public static float beta = 0.5f;
     [MutationProperty("Derivative Cutoff", true)]
+    [JsonProperty]
     public static float dCutoff = 0.1f;
     private const float hz = 10f;
 
