@@ -39,8 +39,11 @@ public static class Utils
         
     public static readonly bool HasAdmin = !OperatingSystem.IsWindows() || new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
         
-    public static readonly string UserAccessibleDataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VRCFaceTracking");
-    public static readonly string PersistentDataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking");
+    // Adaptive-calibration fork: own data folder so this build never reads or rewrites the stock install's
+    // settings, calibration or modules (%APPDATA%\VRCFaceTracking).
+    public const string DataFolderName = "VRCFaceTracking-Adaptive";
+    public static readonly string UserAccessibleDataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), DataFolderName);
+    public static readonly string PersistentDataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), DataFolderName);
     public static readonly string CustomLibsDirectory = Path.Combine(PersistentDataDirectory, "CustomLibs");
     
     public static int GetRandomFreePort()

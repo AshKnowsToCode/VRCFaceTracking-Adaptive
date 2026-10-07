@@ -2,14 +2,14 @@
 	"source": "builtin",
 	"applications": [
 		{
-			"app_key": "benaclejames.vrcft",
+			"app_key": "ashknowstocode.vrcft-adaptive",
 			"launch_type": "binary",
 			"binary_path_windows": "VRCFaceTracking.exe",
 			"is_dashboard_overlay": true,
 
 			"strings": {
 				"en_us": {
-					"name": "VRCFaceTracking",
+					"name": "VRCFaceTracking Adaptive",
 					"description": "VRCFaceTracking provides a bridge between facial tracking hardware and VRChat."
 				}
 			}

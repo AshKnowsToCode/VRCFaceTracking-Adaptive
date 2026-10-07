@@ -25,11 +25,9 @@ public class Utils
 
     public static readonly bool HasAdmin = Core.Utils.HasAdmin;
 
-    public static readonly string UserAccessibleDataDirectory =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "VRCFaceTracking");
+    public static readonly string UserAccessibleDataDirectory = Core.Utils.UserAccessibleDataDirectory;
 
-    public static readonly string PersistentDataDirectory =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCFaceTracking");
+    public static readonly string PersistentDataDirectory = Core.Utils.PersistentDataDirectory;
 
-    public static readonly string CustomLibsDirectory = Path.Combine(PersistentDataDirectory, "CustomLibs");
+    public static readonly string CustomLibsDirectory = Core.Utils.CustomLibsDirectory;
 }

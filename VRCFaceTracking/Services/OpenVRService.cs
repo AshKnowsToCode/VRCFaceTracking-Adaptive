@@ -7,6 +7,10 @@ namespace VRCFaceTracking.Services;
 
 public class OpenVRService(ILogger<OpenVRService> logger)
 {
+    // Adaptive-calibration fork: own SteamVR app key, so registering this build never repoints the stock
+    // install's "benaclejames.vrcft" entry (or its auto-launch) at this exe. Must match app.vrmanifest.
+    private const string AppKey = "ashknowstocode.vrcft-adaptive";
+
     private CVRSystem? _system;
 
     public bool Initialize()
@@ -70,7 +74,7 @@ public class OpenVRService(ILogger<OpenVRService> logger)
         {
             try
             {
-                return IsInitialized && OpenVR.Applications.GetApplicationAutoLaunch("benaclejames.vrcft");
+                return IsInitialized && OpenVR.Applications.GetApplicationAutoLaunch(AppKey);
             }
             catch
             {
@@ -87,7 +91,7 @@ public class OpenVRService(ILogger<OpenVRService> logger)
 
             try
             {
-                var result = OpenVR.Applications.SetApplicationAutoLaunch("benaclejames.vrcft", value);
+                var result = OpenVR.Applications.SetApplicationAutoLaunch(AppKey, value);
                 if (result != EVRApplicationError.None)
                     logger.LogError("Failed to set auto launch: {0}", result);
             }
