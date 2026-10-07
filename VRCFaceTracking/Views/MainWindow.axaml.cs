@@ -1,6 +1,9 @@
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using VRCFaceTracking.Core.Adaptive.Recording;
 
 namespace VRCFaceTracking.Views;
 
@@ -9,6 +12,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // Adaptive-calibration fork: a distinct title, so this build can't be mistaken for the Steam install.
+        Title = Core.Utils.DataFolderName;
 
         try
         {
@@ -20,5 +26,14 @@ public partial class MainWindow : Window
             }
         }
         catch { }
+
+        // Adaptive-calibration fork: F8 drops a session-recorder marker while this window has focus.
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.F8)
+            {
+                SessionRecorder.Current?.AddMarker();
+            }
+        }, RoutingStrategies.Tunnel);
     }
 }
