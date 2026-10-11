@@ -40,14 +40,15 @@ LIPS_JAW_MIN = 0.35  # lips-pressed pose: jaw at least this open, as a fraction 
 ASK_AFTER_S = 12.0  # no fill within this much holding -> the ring stops and asks: retry or skip
 REF_FOLLOW_AFTER = 3  # revised: after this many finished poses the reference follows the person (see stress())
 REF_FOLLOW_MIN = 0.3
-# On hold for the Quest Pro (VD) list until a redo with clear pictures (DESIGN 8.1): real Quest Pro channels, but in
-# nov-ash's 2026-10-10 sessions these poses gave NO channel its highest value (the faces likely didn't match):
+# Nothing is out of the Quest Pro (VD) default list (nov-ash, 2026-10-11: Meta supports these channels, so include them;
+# the first guided runs confirm). Formerly on hold: these four gave NO channel its highest value in nov-ash's 2026-10-10
+# sessions, most likely because the faces didn't match what the tracker calls them:
 # press (the deliberate press read 0.00 / 0.00), stretch (the grimace reads as lower-lip down), funnel (the "oh" reads
 # as a pucker even with the v2 prompt), jaw_forward (0.00 / 0.30 raw in its pose, 0.64 in the pout). Smile and
 # upper_lip stay although everyday use beats their own channels: their leakage sets other ceilings (the smile is the
 # strongest stretch, 0.27-0.40 raw vs 0.16 everyday; the upper-lip pose the strongest funnel, 0.92-1.00 vs 0.55-0.68),
 # and dropping them would make stretch up to 2.5x and funnel up to 1.7x hotter. Per headset, not global (DESIGN 8.1).
-DROPPED = {"press", "stretch", "funnel", "jaw_forward"}
+DROPPED: set = set()
 UPPER_FACE = ("Eye", "Brow")  # "wrong expression" only compares within a face region (see region())
 BOTH_REGIONS = ("NoseSneer", "CheekSquint")  # move with both the eyes and the mouth
 
