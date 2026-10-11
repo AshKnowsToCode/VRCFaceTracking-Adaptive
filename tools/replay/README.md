@@ -12,6 +12,33 @@ python vftrec.py info FILE [--session] [--shapes]      # summary: rate, markers,
 python plot_vftrec.py FILE [--session] [--shapes JawOpen LipPucker] [--start S --end S] [--out plot.png]
 ```
 
+Calibration prototype (v0, DESIGN.md section 10):
+
+```
+python priors.py --known-good LocalSettings.json --out priors/NAME.json REC.vftrec ...   # build v0 priors
+python evaluate.py --priors priors/NAME.json --known-good LocalSettings.json [--loops N] [--spikes] REC.vftrec ...
+```
+
+- `stock.py` - exact emulators of the stock Calibration and Unified Correctors (vectorised). Replaying
+  `20261008-214509.vftrec` through them reproduces its out block for all 88 shapes to 1e-7 (resets at 40.7, 44.9,
+  84.8 s, `warm=True`).
+- `adaptive_v0.py` - the v0 calibrator: `AdaptiveCalibrator(Priors).step(t, x) -> y`. Reference for the C# port.
+- `priors.py` - ceiling priors from a trusted stock calibration (floored at 0.15), rest/noise priors from
+  recordings, the MouthClosed -> JawOpen coupling ratio.
+- `evaluate.py` - candidates raw / stock_known_good / stock_reset / v0 / v0_identity / v0_noguard. Metrics: lips
+  sealed, pinned during speech (mic level > -60 dBFS), max gain, rest jitter, p95 / p99.5 per group vs now;
+  `--loops` = hours-of-use drift, `--spikes` = robustness to one-frame spikes.
+- `poses.py` - pose session (manual stand-in for the guided boost, DESIGN 8.1): `guide` builds a spoken audio
+  guide with the Windows SAPI voice (`tts_sapi.vbs`) plus its timeline `pose_guide_vN.json`; `analyze` finds the
+  guide in a recording by matching the whole timeline (or uses one F8 marker per pose), measures each shape's
+  highest level held >= 0.5 s, the MouthClosed / JawOpen ratio, cross-talk and L/R differences, compares against the
+  old values with the avatar settings each shape feeds, and writes measured priors; `selftest` checks it on
+  synthetic sessions. Person-facing checklist: `docs/adaptive-calibration/POSE_SESSION.md`.
+- `ring_sim.py` - the guided boost's fill ring (DESIGN 8.1): when a pose counts, how fast the ring fills, what it
+  records, and when it stops to ask (retry or skip). Reference for the C# page. `stress REC.vftrec --report OUT.md`
+  replays recorded pose sessions through the first-sketch and revised rules, as recorded and with simulated
+  problems (headset reading 50% / 30%, tremor, one side not moving).
+
 `--session` joins every file of the same app run (hourly rotation, idle gaps). A shape name that is not an
 expression averages the expressions starting with it (`LipPucker` = the four pucker shapes). Files that are still
 being written, or were cut off by a crash, read fine up to the last flush (about 2 s); `info` marks them truncated.

@@ -1,0 +1,289 @@
+{
+ "version": 1,
+ "duration": 233.5,
+ "hold_s": 3.0,
+ "poses": [
+  {
+   "id": "relax",
+   "prompt": 14.163,
+   "go": 18.96,
+   "end": 22.96,
+   "targets": []
+  },
+  {
+   "id": "jaw_open",
+   "prompt": 25.01,
+   "go": 27.573,
+   "end": 30.573,
+   "targets": [
+    "JawOpen"
+   ]
+  },
+  {
+   "id": "lips_pressed_open",
+   "prompt": 32.623,
+   "go": 36.127,
+   "end": 39.127,
+   "targets": [
+    "MouthClosed"
+   ]
+  },
+  {
+   "id": "funnel",
+   "prompt": 41.177,
+   "go": 43.712,
+   "end": 46.712,
+   "targets": [
+    "LipFunnelUpperLeft",
+    "LipFunnelUpperRight",
+    "LipFunnelLowerLeft",
+    "LipFunnelLowerRight"
+   ]
+  },
+  {
+   "id": "pucker",
+   "prompt": 48.762,
+   "go": 51.274,
+   "end": 54.274,
+   "targets": [
+    "LipPuckerUpperLeft",
+    "LipPuckerUpperRight",
+    "LipPuckerLowerLeft",
+    "LipPuckerLowerRight"
+   ]
+  },
+  {
+   "id": "lips_in",
+   "prompt": 56.324,
+   "go": 58.506,
+   "end": 61.506,
+   "targets": [
+    "LipSuckUpperLeft",
+    "LipSuckUpperRight",
+    "LipSuckLowerLeft",
+    "LipSuckLowerRight"
+   ]
+  },
+  {
+   "id": "cheek_puff",
+   "prompt": 63.556,
+   "go": 65.55,
+   "end": 68.55,
+   "targets": [
+    "CheekPuffLeft",
+    "CheekPuffRight"
+   ]
+  },
+  {
+   "id": "cheek_suck",
+   "prompt": 70.6,
+   "go": 73.92,
+   "end": 76.92,
+   "targets": [
+    "CheekSuckLeft",
+    "CheekSuckRight"
+   ]
+  },
+  {
+   "id": "smile",
+   "prompt": 78.97,
+   "go": 81.943,
+   "end": 84.943,
+   "targets": [
+    "MouthCornerPullLeft",
+    "MouthCornerPullRight",
+    "MouthCornerSlantLeft",
+    "MouthCornerSlantRight",
+    "CheekSquintLeft",
+    "CheekSquintRight"
+   ]
+  },
+  {
+   "id": "upper_lip",
+   "prompt": 86.993,
+   "go": 89.767,
+   "end": 92.767,
+   "targets": [
+    "MouthUpperUpLeft",
+    "MouthUpperUpRight",
+    "MouthUpperDeepenLeft",
+    "MouthUpperDeepenRight"
+   ]
+  },
+  {
+   "id": "lower_lip",
+   "prompt": 94.817,
+   "go": 97.926,
+   "end": 100.926,
+   "targets": [
+    "MouthLowerDownLeft",
+    "MouthLowerDownRight"
+   ]
+  },
+  {
+   "id": "frown",
+   "prompt": 102.976,
+   "go": 107.038,
+   "end": 110.038,
+   "targets": [
+    "MouthFrownLeft",
+    "MouthFrownRight"
+   ]
+  },
+  {
+   "id": "stretch",
+   "prompt": 112.088,
+   "go": 115.617,
+   "end": 118.617,
+   "targets": [
+    "MouthStretchLeft",
+    "MouthStretchRight"
+   ]
+  },
+  {
+   "id": "press",
+   "prompt": 120.667,
+   "go": 122.694,
+   "end": 125.694,
+   "targets": [
+    "MouthPressLeft",
+    "MouthPressRight",
+    "MouthTightenerLeft",
+    "MouthTightenerRight"
+   ]
+  },
+  {
+   "id": "chin_raise",
+   "prompt": 127.744,
+   "go": 131.288,
+   "end": 134.288,
+   "targets": [
+    "MouthRaiserLower",
+    "MouthRaiserUpper"
+   ]
+  },
+  {
+   "id": "sneer",
+   "prompt": 136.338,
+   "go": 139.814,
+   "end": 142.814,
+   "targets": [
+    "NoseSneerLeft",
+    "NoseSneerRight"
+   ]
+  },
+  {
+   "id": "jaw_left",
+   "prompt": 144.863,
+   "go": 146.712,
+   "end": 149.712,
+   "targets": [
+    "JawLeft",
+    "JawRight"
+   ]
+  },
+  {
+   "id": "jaw_right",
+   "prompt": 151.762,
+   "go": 153.613,
+   "end": 156.613,
+   "targets": [
+    "JawLeft",
+    "JawRight"
+   ]
+  },
+  {
+   "id": "jaw_forward",
+   "prompt": 158.663,
+   "go": 160.323,
+   "end": 163.323,
+   "targets": [
+    "JawForward"
+   ]
+  },
+  {
+   "id": "mouth_left",
+   "prompt": 165.373,
+   "go": 169.215,
+   "end": 172.215,
+   "targets": [
+    "MouthUpperLeft",
+    "MouthUpperRight",
+    "MouthLowerLeft",
+    "MouthLowerRight"
+   ]
+  },
+  {
+   "id": "mouth_right",
+   "prompt": 174.265,
+   "go": 178.114,
+   "end": 181.114,
+   "targets": [
+    "MouthUpperLeft",
+    "MouthUpperRight",
+    "MouthLowerLeft",
+    "MouthLowerRight"
+   ]
+  },
+  {
+   "id": "squint",
+   "prompt": 183.164,
+   "go": 186.345,
+   "end": 189.345,
+   "targets": [
+    "EyeSquintLeft",
+    "EyeSquintRight"
+   ]
+  },
+  {
+   "id": "eyes_wide",
+   "prompt": 191.395,
+   "go": 193.73,
+   "end": 196.73,
+   "targets": [
+    "EyeWideLeft",
+    "EyeWideRight"
+   ]
+  },
+  {
+   "id": "brows_up",
+   "prompt": 198.78,
+   "go": 201.378,
+   "end": 204.378,
+   "targets": [
+    "BrowInnerUpLeft",
+    "BrowInnerUpRight",
+    "BrowOuterUpLeft",
+    "BrowOuterUpRight"
+   ]
+  },
+  {
+   "id": "brows_down",
+   "prompt": 206.428,
+   "go": 210.11,
+   "end": 213.11,
+   "targets": [
+    "BrowLowererLeft",
+    "BrowLowererRight",
+    "BrowPinchLeft",
+    "BrowPinchRight"
+   ]
+  },
+  {
+   "id": "tongue_out",
+   "prompt": 215.16,
+   "go": 216.823,
+   "end": 219.823,
+   "targets": [
+    "TongueOut"
+   ]
+  },
+  {
+   "id": "relax_end",
+   "prompt": 221.873,
+   "go": 226.45,
+   "end": 230.45,
+   "targets": []
+  }
+ ]
+}
