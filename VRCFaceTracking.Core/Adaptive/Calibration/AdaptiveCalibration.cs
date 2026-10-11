@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using VRCFaceTracking.Core.Adaptive.Guided;
 using VRCFaceTracking.Core.Params.Data;
 using VRCFaceTracking.Core.Params.Data.Mutation;
 using VRCFaceTracking.Core.Params.Expressions;
@@ -32,12 +33,16 @@ public class AdaptiveCalibration : TrackingMutation
 
     public override MutationPriority Step => MutationPriority.Preprocessor;
 
-    // After the Session Recorder (int.MinValue), where the stock Calibration runs.
-    public override int Order => 0;
+    // After the Session Recorder (int.MinValue) and before the stock Calibration (0): the guided calibration needs the
+    // raw module values even while the stock Calibration is on (this one then passes data through to it).
+    public override int Order => -1;
 
     public override bool IsSaved => true;
 
     public static readonly string StateDirectory = Path.Combine(Utils.PersistentDataDirectory, "adaptive-calibration");
+
+    /// <summary> The live mutation, for the guided calibration page. </summary>
+    public static AdaptiveCalibration? Current { get; private set; }
 
     private const double SaveEveryActiveS = 60.0;
     private const int SnapshotDays = 14;
@@ -75,6 +80,7 @@ public class AdaptiveCalibration : TrackingMutation
         }
 
         _exitHooked = true;
+        Current = this;
         AppDomain.CurrentDomain.ProcessExit += (_, _) => SaveNow(blocking: true);
 
         var modules = UnifiedTracking.Mutator?.LibManager?.LoadedModulesMetadata;
@@ -93,6 +99,18 @@ public class AdaptiveCalibration : TrackingMutation
 
         try
         {
+            var n = _in.Length;
+            for (var i = 0; i < n; i++)
+            {
+                _in[i] = data.Shapes[i].Weight;
+            }
+
+            var t = (Stopwatch.GetTimestamp() - _clockStart) / (double)Stopwatch.Frequency;
+            if (GuidedTap.HasListeners)
+            {
+                GuidedTap.Publish(t, _in); // raw values for a running guided calibration
+            }
+
             if (StockCalibrationActive())
             {
                 return;
@@ -107,13 +125,6 @@ public class AdaptiveCalibration : TrackingMutation
 
                 var cal = _cal!;
                 cal.LearningEnabled = !pauseLearning;
-                var n = _in.Length;
-                for (var i = 0; i < n; i++)
-                {
-                    _in[i] = data.Shapes[i].Weight;
-                }
-
-                var t = (Stopwatch.GetTimestamp() - _clockStart) / (double)Stopwatch.Frequency;
                 cal.Step(t, _in, _out);
                 for (var i = 0; i < n; i++)
                 {
@@ -174,6 +185,20 @@ public class AdaptiveCalibration : TrackingMutation
 
         priors ??= CalibrationPriors.Identity(names);
         key ??= "identity";
+
+        // a kept guided calibration replaces the module's starting values for this person
+        var personal = PersonalPriorsPath(key);
+        if (File.Exists(personal))
+        {
+            try
+            {
+                priors = CalibrationPriors.Load(personal);
+            }
+            catch (Exception e)
+            {
+                Logger?.LogWarning(e, "Adaptive Calibration couldn't read {Path}; using the module's starting values.", personal);
+            }
+        }
         if (_cal != null && key == _moduleKey)
         {
             return;
@@ -205,6 +230,67 @@ public class AdaptiveCalibration : TrackingMutation
         Logger?.LogInformation(
             "Adaptive Calibration: priors {Priors} for {Module}; {State}.", _cal.Priors.Name, key,
             loaded ? $"learned state loaded ({_cal.ActiveSeconds / 3600.0:0.0} active h)" : "no learned state yet");
+    }
+
+    public static string PersonalPriorsPath(string moduleKey) =>
+        Path.Combine(StateDirectory, $"personal-{Sanitize(moduleKey)}.json");
+
+    /// <summary> What a guided calibration needs from the live calibrator, or null before tracking data arrived. </summary>
+    public GuidedInfo? GetGuidedInfo()
+    {
+        lock (_lock)
+        {
+            if (_cal == null || _moduleKey == null)
+            {
+                return null;
+            }
+
+            var n = _cal.Count;
+            return new GuidedInfo(
+                _moduleKey,
+                _cal.Priors,
+                Enumerable.Range(0, n).Select(i => _cal.Ceiling(i) * _cal.Guard(i)).ToArray(),
+                Enumerable.Range(0, n).Select(_cal.MaxHeldPeak).ToArray(),
+                _cal.ActiveSeconds);
+        }
+    }
+
+    /// <summary>
+    /// Makes a kept guided calibration the starting values for this person: written to the personal priors file,
+    /// the learned state starts over from them (the old state stays in its file and snapshots).
+    /// </summary>
+    public void ApplyPersonalPriors(CalibrationPriors priors)
+    {
+        SaveNow(blocking: true);
+        lock (_lock)
+        {
+            var key = _moduleKey ?? "identity";
+            Directory.CreateDirectory(StateDirectory);
+            var path = PersonalPriorsPath(key);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, priors.ToJson(), new UTF8Encoding(false));
+            File.Move(tmp, path, overwrite: true);
+            var old = _cal;
+            _cal = new AdaptiveCalibrator(priors.Reorder(ExpressionNames()));
+            if (old != null)
+            {
+                _cal.CarryOver(old); // keep the everyday knowledge (rest, noise, held peaks); ceilings start anew
+            }
+
+            var statePath = StatePath(_cal.Priors.Name);
+            if (File.Exists(statePath))
+            {
+                var keep = Path.Combine(StateDirectory, "snapshots",
+                    $"{Path.GetFileNameWithoutExtension(statePath)}-before-guided-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(keep)!);
+                File.Move(statePath, keep, overwrite: true);
+            }
+
+            _lastSaveActiveS = 0.0;
+            Logger?.LogInformation("Adaptive Calibration now starts from your guided calibration ({Priors}).", priors.Name);
+        }
+
+        SaveNow(blocking: true);
     }
 
     private static string StatePath(string priorsName) =>
@@ -321,6 +407,36 @@ public class AdaptiveCalibration : TrackingMutation
         SaveNow(blocking: true);
     }
 
+    [MutationButton("Forget guided calibration")]
+    public void ForgetPersonalPriors()
+    {
+        string? key;
+        lock (_lock)
+        {
+            key = _moduleKey;
+        }
+
+        var path = key != null ? PersonalPriorsPath(key) : null;
+        if (path == null || !File.Exists(path))
+        {
+            Logger?.LogInformation("Adaptive Calibration has no guided calibration to forget.");
+            return;
+        }
+
+        SaveNow(blocking: true);
+        var keep = Path.Combine(StateDirectory, "snapshots",
+            $"{Path.GetFileNameWithoutExtension(path)}-forgotten-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(keep)!);
+        File.Move(path, keep, overwrite: true);
+        lock (_lock)
+        {
+            _cal = null; // the next frame picks the module's starting values again
+            _modulesChanged = true;
+        }
+
+        Logger?.LogInformation("Adaptive Calibration forgot the guided calibration (copy kept in snapshots); back to the module's starting values.");
+    }
+
     [MutationButton("Show what it learned (log)")]
     public void LogStatus()
     {
@@ -354,3 +470,12 @@ public class AdaptiveCalibration : TrackingMutation
         Process.Start(new ProcessStartInfo { FileName = StateDirectory, UseShellExecute = true });
     }
 }
+
+/// <summary> The live calibrator's view for a guided calibration (see <see cref="AdaptiveCalibration.GetGuidedInfo"/>). </summary>
+/// <param name="ModuleKey">Tracking module the priors were chosen for ("identity" when none).</param>
+/// <param name="Priors">Starting values in use, in expression order.</param>
+/// <param name="Ceilings">Ceilings in effect now (learned ceiling x guardrail), per expression.</param>
+/// <param name="Everyday">Highest held peak seen in normal use, per expression (0 = none yet).</param>
+/// <param name="ActiveSeconds">How much normal use the calibrator has learned from.</param>
+public sealed record GuidedInfo(string ModuleKey, CalibrationPriors Priors, double[] Ceilings, double[] Everyday,
+    double ActiveSeconds = 0);

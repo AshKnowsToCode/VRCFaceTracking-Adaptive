@@ -288,7 +288,8 @@ def find_runs(paths: list[str]) -> list[Run]:
     return runs
 
 
-def stress(paths: list[str], first_ref: str, repeat_ref: str, report: str | None) -> str:
+def stress(paths: list[str], first_ref: str, repeat_ref: str, report: str | None, on_case=None) -> str:
+    """on_case(dict): called with every revised-rules step's inputs and result (golden_ring.py)."""
     from adaptive_v0 import Priors
 
     runs = find_runs(paths)
@@ -337,8 +338,14 @@ def stress(paths: list[str], first_ref: str, repeat_ref: str, report: str | None
                     scale, levels, jaw_raw = 1.0, [], None
                     for st in steps:
                         tref = pose_ref(k, st, ref) if (rules is NEW and rname == "repeat run") else ref
-                        res = run_step(st, segs, names, ref * scale, floor, rules, comp_for(k, st, ref),
-                                       jaw_raw if rules.follow_ref else None, tref * scale)
+                        comp = comp_for(k, st, ref)
+                        jr = jaw_raw if rules.follow_ref else None
+                        res = run_step(st, segs, names, ref * scale, floor, rules, comp, jr, tref * scale)
+                        if on_case is not None and rules is NEW:
+                            on_case({"scenario": sname, "reference": rname, "session": k, "step": st,
+                                     "G": np.concatenate([segs[p] for p in st.sources]), "ref": ref * scale,
+                                     "tref": tref * scale, "floor": floor, "companions": comp, "jaw_raw": jr,
+                                     "result": res})
                         if st.id == "jaw_open" and res[""]["level"] is not None:
                             jaw_raw = res[""]["level"] * scale * tref[ix["JawOpen"]]
                         kind, text = classify(res, st)

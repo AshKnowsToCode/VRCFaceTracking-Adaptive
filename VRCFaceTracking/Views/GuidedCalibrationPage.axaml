@@ -1,0 +1,79 @@
+<UserControl
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:g="using:VRCFaceTracking.Views.Guided"
+    x:Class="VRCFaceTracking.Views.GuidedCalibrationPage">
+
+    <ScrollViewer>
+        <StackPanel Margin="0,10,0,20" Spacing="12">
+
+            <!-- before a run -->
+            <StackPanel x:Name="StartPanel" Spacing="12">
+                <TextBlock FontSize="20" FontWeight="SemiBold" Text="Guided calibration" />
+                <TextBlock TextWrapping="Wrap" Opacity="0.8"
+                           Text="About two and a half minutes. Make each face at full strength, but comfortably, and hold it until the ring is full and you hear the chime. It works hands-free: follow the voice in the headset, in front of a mirror. Nothing changes until you press Keep at the end." />
+                <Border CornerRadius="6" Padding="16,12" Background="{DynamicResource ControlFillColorDefaultBrush}">
+                    <StackPanel Spacing="8">
+                        <TextBlock x:Name="TrackingLine" FontWeight="SemiBold" />
+                        <TextBlock x:Name="ReadyLine" TextWrapping="Wrap" Opacity="0.8" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="UseAdaptiveButton" Content="Use Adaptive Calibration" Click="OnUseAdaptive" />
+                            <Button x:Name="StartButton" Classes="accent" Content="Start" Click="OnStart" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <TextBlock FontSize="13" FontWeight="SemiBold" Opacity="0.6" Text="Past runs" />
+                <StackPanel x:Name="HistoryList" Spacing="4" />
+            </StackPanel>
+
+            <!-- during a run -->
+            <Grid x:Name="RunPanel" ColumnDefinitions="Auto,*" IsVisible="False">
+                <StackPanel Grid.Column="0" Spacing="6">
+                    <g:PoseCanvas x:Name="Canvas" Width="300" Height="300" />
+                    <StackPanel x:Name="MistakeBox" HorizontalAlignment="Center" Spacing="2">
+                        <g:PoseCanvas x:Name="MistakeCanvas" Width="110" Height="110" ShowRing="False" Mistake="True" />
+                        <TextBlock x:Name="MistakeCaption" FontSize="12" Opacity="0.7" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="24,0,0,0" Spacing="10">
+                    <TextBlock x:Name="Counter" FontSize="12" Opacity="0.6" />
+                    <ProgressBar x:Name="Overall" Minimum="0" Maximum="1" />
+                    <TextBlock x:Name="PoseTitle" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock x:Name="PosePrompt" TextWrapping="Wrap" />
+                    <TextBlock x:Name="PoseMistake" TextWrapping="Wrap" Opacity="0.65" />
+                    <StackPanel x:Name="LevelBox" Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Strength" FontSize="12" Opacity="0.6" />
+                            <TextBlock Grid.Column="1" x:Name="LevelText" FontSize="12" Opacity="0.6" />
+                        </Grid>
+                        <ProgressBar x:Name="Level" Minimum="0" Maximum="1.2" />
+                    </StackPanel>
+                    <Border CornerRadius="6" Padding="12,8" Background="{DynamicResource ControlFillColorDefaultBrush}">
+                        <TextBlock x:Name="Message" TextWrapping="Wrap" />
+                    </Border>
+                    <TextBlock x:Name="AlsoMoving" FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="PauseButton" Content="Pause" Click="OnPause" />
+                        <Button x:Name="RetryButton" Content="Try again" Click="OnRetry" />
+                        <Button x:Name="SkipButton" Content="Skip" Click="OnSkip" />
+                        <Button x:Name="StopButton" Content="Stop" Click="OnStop" />
+                    </StackPanel>
+                    <CheckBox x:Name="VoiceCheck" Content="Voice and sounds" IsChecked="True" />
+                </StackPanel>
+            </Grid>
+
+            <!-- at the end -->
+            <StackPanel x:Name="SummaryPanel" IsVisible="False" Spacing="10">
+                <TextBlock x:Name="SummaryTitle" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock x:Name="SummaryNote" TextWrapping="Wrap" Opacity="0.8" />
+                <StackPanel x:Name="SummaryRows" Spacing="2" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="KeepButton" Classes="accent" Content="Keep" Click="OnKeep" />
+                    <Button x:Name="DiscardButton" Content="Discard" Click="OnDiscard" />
+                </StackPanel>
+                <TextBlock x:Name="KeptNote" TextWrapping="Wrap" Opacity="0.8" />
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

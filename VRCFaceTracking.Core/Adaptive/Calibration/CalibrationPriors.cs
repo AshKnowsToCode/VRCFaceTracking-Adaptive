@@ -21,6 +21,13 @@ public sealed class CalibrationPriors
     /// <summary> Child -> (parent, ratio): the child takes its parent's scale times the ratio (DESIGN 6.10). </summary>
     public required IReadOnlyDictionary<string, (string Parent, double Ratio)> Coupled { get; init; }
 
+    /// <summary>
+    /// Optional per-expression upper limit for the learned ceiling, above c0 x 1.6 (0 = none). A guided calibration
+    /// that makes an expression stronger stores the ceiling in effect before it, so normal use can calm it all the way
+    /// back if everyday expressions go past the new value (adaptive_v0.Priors.c_max).
+    /// </summary>
+    public double[]? CMax { get; init; }
+
     private const string ResourcePrefix = "VRCFaceTracking.Core.Adaptive.Calibration.Priors.";
 
     /// <summary> Embedded priors by tracking module name (<c>ModuleMetadata.Name</c>). </summary>
@@ -54,10 +61,36 @@ public sealed class CalibrationPriors
             B0 = d["b0"]!.Values<double>().ToArray(),
             Sigma0 = d["sigma0"]!.Values<double>().ToArray(),
             Coupled = coupled,
+            CMax = d["c_max"] is JArray cm ? cm.Values<double>().ToArray() : null,
         };
     }
 
     public static CalibrationPriors Load(string path) => Parse(File.ReadAllText(path), Path.GetFileNameWithoutExtension(path));
+
+    /// <summary> Where they came from, written into the JSON's meta (e.g. which guided runs). </summary>
+    public string? Source { get; init; }
+
+    /// <summary> Same JSON layout as tools/replay/priors/*.json. </summary>
+    public string ToJson()
+    {
+        var coupled = new JObject();
+        foreach (var (child, (parent, ratio)) in Coupled)
+        {
+            coupled[child] = new JObject { ["parent"] = parent, ["ratio"] = Math.Round(ratio, 4) };
+        }
+
+        return new JObject
+        {
+            ["schema"] = 1,
+            ["meta"] = new JObject { ["name"] = Name, ["source"] = Source ?? "" },
+            ["expressions"] = new JArray(Expressions),
+            ["c0"] = new JArray(C0.Select(v => Math.Round(v, 6))),
+            ["b0"] = new JArray(B0.Select(v => Math.Round(v, 6))),
+            ["sigma0"] = new JArray(Sigma0.Select(v => Math.Round(v, 6))),
+            ["coupled"] = coupled,
+            ["c_max"] = CMax != null ? new JArray(CMax.Select(v => Math.Round(v, 6))) : null,
+        }.ToString(Newtonsoft.Json.Formatting.Indented);
+    }
 
     public static CalibrationPriors Identity(IReadOnlyList<string> names) => new()
     {
@@ -107,6 +140,8 @@ public sealed class CalibrationPriors
             B0 = Pick(B0, 0.0),
             Sigma0 = Pick(Sigma0, 0.005),
             Coupled = Coupled,
+            CMax = CMax != null ? Pick(CMax, 0.0) : null,
+            Source = Source,
         };
     }
 }

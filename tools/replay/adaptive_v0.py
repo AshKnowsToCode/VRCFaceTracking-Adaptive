@@ -95,6 +95,10 @@ class Priors:
     sigma0: np.ndarray  # noise prior
     coupled: dict = field(default_factory=dict)  # child -> {"parent": name, "ratio": r}
     meta: dict = field(default_factory=dict)
+    # Optional per-expression upper limit for the learned ceiling, above c0 * bound_up (0 = none). A guided calibration
+    # that makes an expression stronger stores the ceiling that was in effect before, so normal use can calm it all the
+    # way back if everyday expressions go past the new value (DESIGN 8.1).
+    c_max: np.ndarray | None = None
 
     @classmethod
     def identity(cls, names: list[str]) -> "Priors":
@@ -107,12 +111,15 @@ class Priors:
         d = json.load(open(path, encoding="utf-8"))
         names = d["expressions"]
         return cls(names, np.array(d["c0"], float), np.array(d["b0"], float), np.array(d["sigma0"], float),
-                   d.get("coupled", {}), d.get("meta", {}))
+                   d.get("coupled", {}), d.get("meta", {}),
+                   np.array(d["c_max"], float) if d.get("c_max") is not None else None)
 
     def save(self, path: str):
         d = {"schema": 1, "meta": self.meta, "expressions": self.expressions,
              "c0": [round(float(v), 6) for v in self.c0], "b0": [round(float(v), 6) for v in self.b0],
              "sigma0": [round(float(v), 6) for v in self.sigma0], "coupled": self.coupled}
+        if self.c_max is not None:
+            d["c_max"] = [round(float(v), 6) for v in self.c_max]
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(d, f, indent=1)
             f.write("\n")
@@ -122,7 +129,7 @@ class Priors:
         ix = {n: i for i, n in enumerate(self.expressions)}
         pick = lambda a, dflt: np.array([a[ix[n]] if n in ix else dflt for n in names], float)
         return Priors(list(names), pick(self.c0, 1.0), pick(self.b0, 0.0), pick(self.sigma0, 0.005),
-                      self.coupled, self.meta)
+                      self.coupled, self.meta, pick(self.c_max, 0.0) if self.c_max is not None else None)
 
 
 def soft_knee(u: np.ndarray, d: np.ndarray) -> np.ndarray:
@@ -139,7 +146,8 @@ class AdaptiveCalibrator:
         n = self.n = len(self.names)
         self.c0 = np.clip(priors.c0, p.c_abs_min, 1.0)
         self.c_lo = np.maximum(self.c0 / p.bound_down, p.c_abs_min)
-        self.c_hi = np.minimum(self.c0 * p.bound_up, 1.0)
+        c_max = priors.c_max if priors.c_max is not None else np.zeros(n)
+        self.c_hi = np.minimum(np.maximum(self.c0 * p.bound_up, c_max), 1.0)
 
         # learned state (persisted)
         self.active_s = 0.0

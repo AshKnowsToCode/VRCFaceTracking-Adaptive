@@ -34,6 +34,12 @@
                     <ui:SymbolIconSource Symbol="Edit" />
                 </ui:NavigationViewItem.IconSource>
             </ui:NavigationViewItem>
+            <!-- Adaptive-calibration fork -->
+            <ui:NavigationViewItem Tag="Guided" Content="Guided calibration">
+                <ui:NavigationViewItem.IconSource>
+                    <ui:SymbolIconSource Symbol="Target" />
+                </ui:NavigationViewItem.IconSource>
+            </ui:NavigationViewItem>
         </ui:NavigationView.MenuItems>
 
         <Panel x:Name="PageContainer" Margin="20,0,20,20" />

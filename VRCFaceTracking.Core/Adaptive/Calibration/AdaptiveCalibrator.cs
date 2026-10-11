@@ -81,7 +81,8 @@ public sealed class AdaptiveCalibrator
         {
             _c0[i] = Math.Min(Math.Max(priors.C0[i], _p.CAbsMin), 1.0);
             _cLo[i] = Math.Max(_c0[i] / _p.BoundDown, _p.CAbsMin);
-            _cHi[i] = Math.Min(_c0[i] * _p.BoundUp, 1.0);
+            var cMax = priors.CMax?[i] ?? 0.0;
+            _cHi[i] = Math.Min(Math.Max(_c0[i] * _p.BoundUp, cMax), 1.0);
         }
 
         _b0 = (double[])priors.B0.Clone();
@@ -149,6 +150,18 @@ public sealed class AdaptiveCalibrator
     public double Rest(int i) => _b[i];
 
     public double Noise(int i) => _sigma[i];
+
+    /// <summary> Highest held peak (raw) among the ones kept for this expression, 0 when none (everyday evidence). </summary>
+    public double MaxHeldPeak(int i)
+    {
+        var m = 0.0;
+        for (var k = 0; k < _peakN[i]; k++)
+        {
+            m = Math.Max(m, _peakV[i * _keep + k]);
+        }
+
+        return m;
+    }
 
     /// <summary> Calibrates one frame. <paramref name="t"/> in seconds on any monotonic clock. </summary>
     public void Step(double t, ReadOnlySpan<float> input, Span<float> output)
@@ -610,6 +623,28 @@ public sealed class AdaptiveCalibrator
                 start = j;
             }
         }
+    }
+
+    /// <summary>
+    /// Takes over what another calibrator learned from raw data (rest histogram, noise, held peaks, active time) while
+    /// keeping this one's own ceilings (its priors). Used when a kept guided calibration replaces the starting values:
+    /// everyday knowledge survives, so held peaks that go past a new, stronger ceiling calm it again right away.
+    /// </summary>
+    public void CarryOver(AdaptiveCalibrator old)
+    {
+        if (old._n != _n || old._bins != _bins || old._keep != _keep)
+        {
+            return;
+        }
+
+        _activeS = old._activeS;
+        Array.Copy(old._b, _b, _n);
+        Array.Copy(old._sigma, _sigma, _n);
+        Array.Copy(old._hist, _hist, _hist.Length);
+        _histN = old._histN;
+        Array.Copy(old._peakV, _peakV, _peakV.Length);
+        Array.Copy(old._peakT, _peakT, _peakT.Length);
+        Array.Copy(old._peakN, _peakN, _n);
     }
 
     // ------------------------------------------------------------------------------------------------------ state

@@ -23,12 +23,25 @@ python evaluate.py --priors priors/NAME.json --known-good LocalSettings.json [--
   `20261008-214509.vftrec` through them reproduces its out block for all 88 shapes to 1e-7 (resets at 40.7, 44.9,
   84.8 s, `warm=True`).
 - `adaptive_v0.py` - the v0 calibrator: `AdaptiveCalibrator(Priors).step(t, x) -> y`. Golden reference for the C#
-  port (`VRCFaceTracking.Core/Adaptive/Calibration/AdaptiveCalibrator.cs`); change both together.
+  port (`VRCFaceTracking.Core/Adaptive/Calibration/AdaptiveCalibrator.cs`); change both together. Priors may carry an optional
+  `c_max` (upper limit for the learned ceiling above c0 x 1.6; a kept guided calibration stores the value before it).
 - `golden_v0.py` - golden test of the C# port: `python golden_v0.py REC.vftrec ... [--priors P] [--module NAME]
   [--split 0.5]` builds `AdaptiveReplay/` (a console that replays a .vftrec through the C# calibrator), runs both and
   requires every output, the per-frame gate and the final ceilings to match (tolerance 1e-4; bit-exact so far).
   `--module "Virtual Desktop"` uses the priors embedded in the app; `--split` saves the state as JSON mid-way and
   continues on a fresh calibrator in both languages.
+- Guided calibration (C# in `VRCFaceTracking.Core/Adaptive/Guided`, page `VRCFaceTracking/Views/GuidedCalibrationPage`):
+  - `golden_ring.py POSES.vftrec` - every pose of ring_sim's stress run through the C# `PoseRing`; same fill timing,
+    asks, reasons and recorded values required (460 cases, 0 differences on 2026-10-11).
+  - `golden_analysis.py POSES.vftrec --everyday ...` - C# `PoseMeasure` vs `poses.measure()` and C# `PoseAnalysis` vs
+    `poses.analyze()`, and that analyze() still reproduces the priors in use (all exact on 2026-10-11).
+  - `guided_module_data.py` - builds `Guided/Data/guided-<module>.json` (per pose: companions, typical best hold) from
+    pose sessions; known wrong faces (`MISTAKES`) never become companions.
+  - `guided_replay.py POSES.vftrec --run N` - a whole `GuidedSession` driven by one recorded guide run (the simulated
+    person skips when asked): what asked, the summary, and the resulting starting values vs the v1 priors.
+  - `AdaptiveReplay pictures OUT.html` - every pose picture on one page for review.
+  - The app itself: `VRCFT_START_PAGE=Guided` opens the page first; `VRCFT_GUIDED_DEMO=1` runs it on made-up face
+    data (no headset, silent, nothing saved unless Keep is pressed).
 - `priors.py` - ceiling priors from a trusted stock calibration (floored at 0.15), rest/noise priors from
   recordings, the MouthClosed -> JawOpen coupling ratio.
 - `evaluate.py` - candidates raw / stock_known_good / stock_reset / v0 / v0_identity / v0_noguard. Metrics: lips

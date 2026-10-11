@@ -11,6 +11,7 @@ public partial class ShellPage : UserControl
     private readonly ModuleRegistryPage _moduleRegistryPage = new();
     private readonly MutatorPage _mutatorPage = new();
     private readonly SettingsPage _settingsPage = new();
+    private readonly GuidedCalibrationPage _guidedPage = new(); // adaptive-calibration fork
 
     private Control? _currentPage;
 
@@ -23,6 +24,7 @@ public partial class ShellPage : UserControl
         PageContainer.Children.Add(_moduleRegistryPage);
         PageContainer.Children.Add(_mutatorPage);
         PageContainer.Children.Add(_settingsPage);
+        PageContainer.Children.Add(_guidedPage);
 
         foreach (var child in PageContainer.Children)
             child.IsVisible = false;
@@ -30,6 +32,13 @@ public partial class ShellPage : UserControl
         // Select the first nav item and show the main page
         NavView.SelectedItem = NavView.MenuItems[0];
         ShowPage(_mainPage);
+
+        // Adaptive-calibration fork, testing aid: VRCFT_START_PAGE=Guided opens the guided calibration page first.
+        if (Environment.GetEnvironmentVariable("VRCFT_START_PAGE") == "Guided")
+        {
+            NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().First(i => i.Tag as string == "Guided");
+            ShowPage(_guidedPage);
+        }
     }
 
     private void ShowPage(Control page)
@@ -61,6 +70,7 @@ public partial class ShellPage : UserControl
                 "Output" => _outputPage,
                 "ModuleRegistry" => _moduleRegistryPage,
                 "Mutator" => _mutatorPage,
+                "Guided" => _guidedPage,
                 _ => _mainPage
             });
         }

@@ -18,6 +18,8 @@
   <ItemGroup>
     <!-- Adaptive-calibration fork: per-module calibration priors (see CalibrationPriors.ForModule). -->
     <EmbeddedResource Include="Adaptive\Calibration\Priors\*.json" LogicalName="VRCFaceTracking.Core.Adaptive.Calibration.Priors.%(Filename)%(Extension)" />
+    <!-- Guided calibration: per-module pose data (see GuidedModuleData.ForModule). -->
+    <EmbeddedResource Include="Adaptive\Guided\Data\*.json" LogicalName="VRCFaceTracking.Core.Adaptive.Guided.Data.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64' Or ('$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows')))">
     <Content Include="..\VRCFaceTracking\runtimes\win64\fti_osc.dll" Link="fti_osc.dll">

@@ -7,5 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\VRCFaceTracking.Core\VRCFaceTracking.Core.csproj" />
+    <!-- the pose pictures have no UI dependencies: "pictures" mode renders them to an SVG sheet for review -->
+    <Compile Include="..\..\..\VRCFaceTracking\Views\Guided\PosePictures.cs" Link="PosePictures.cs" />
   </ItemGroup>
 </Project>

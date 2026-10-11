@@ -8,6 +8,15 @@ using System.Text;
 using System.Text.Json;
 using VRCFaceTracking.Core.Adaptive.Calibration;
 
+switch (args.Length > 0 ? args[0] : "")
+{
+    case "ring": return RingReplay.Run(args[1..]); // golden_ring.py
+    case "measure": return AnalysisReplay.Measure(args[1..]); // golden_analysis.py
+    case "analyze": return AnalysisReplay.Analyze(args[1..]); // golden_analysis.py
+    case "guided": return GuidedReplay.Run(args[1..]); // guided_replay.py
+    case "pictures": return PictureSheet.Run(args[1..]); // pose pictures for review
+}
+
 string? priorsPath = null, outPath = null, recPath = null, module = null;
 var split = -1;
 for (var a = 0; a < args.Length; a++)
