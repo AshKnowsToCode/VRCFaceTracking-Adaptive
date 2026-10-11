@@ -1,0 +1,356 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using VRCFaceTracking.Core.Params.Data;
+using VRCFaceTracking.Core.Params.Data.Mutation;
+using VRCFaceTracking.Core.Params.Expressions;
+using StockCalibration = VRCFaceTracking.Core.Params.Data.Mutation.Calibration;
+
+namespace VRCFaceTracking.Core.Adaptive.Calibration;
+
+/// <summary>
+/// Adaptive calibration v0 as a mutation: replaces the stock <see cref="StockCalibration"/> (DESIGN.md sections 6 and 10).
+/// Starts from measured priors for the tracking module, then learns from normal use, bounded: an expression can only
+/// get calmer than its starting value (at most 1.6x), never hotter.
+/// </summary>
+/// <remarks>
+/// Learned state lives in its own file (<c>%APPDATA%\VRCFaceTracking-Adaptive\adaptive-calibration\</c>), not in
+/// LocalSettings.json: written atomically every 60 active seconds and on exit, with one snapshot per day kept 14
+/// days. It does nothing while the stock Calibration is on (both would scale the same values).
+/// </remarks>
+public class AdaptiveCalibration : TrackingMutation
+{
+    [MutationProperty("Pause learning (keep the current values)", true)]
+    public bool pauseLearning = false;
+
+    public override string Name => "Adaptive Calibration";
+
+    public override string Description =>
+        "Starts from measured values for your headset and learns from normal use. It can only make an expression " +
+        "calmer than its start, never stronger. Replaces Calibration; switch that one off.";
+
+    public override MutationPriority Step => MutationPriority.Preprocessor;
+
+    // After the Session Recorder (int.MinValue), where the stock Calibration runs.
+    public override int Order => 0;
+
+    public override bool IsSaved => true;
+
+    public static readonly string StateDirectory = Path.Combine(Utils.PersistentDataDirectory, "adaptive-calibration");
+
+    private const double SaveEveryActiveS = 60.0;
+    private const int SnapshotDays = 14;
+
+    // Careful with new fields: MutationComponentFactory walks EVERY field of a mutation (private and static too) and
+    // recurses into the objects they hold when the UI is built at load. Keep runtime objects null until the first
+    // frame and never hold framework objects (JsonSerializerOptions crashed it) or other mutations in a field then.
+    private readonly object _lock = new();
+    private AdaptiveCalibrator? _cal;
+    private string? _moduleKey;
+    private bool _modulesChanged = true;
+    private double _lastSaveActiveS;
+    private readonly float[] _in = new float[(int)UnifiedExpressions.Max];
+    private readonly float[] _out = new float[(int)UnifiedExpressions.Max];
+    private readonly long _clockStart = Stopwatch.GetTimestamp();
+    private StockCalibration? _stock;
+    private bool _stockWarned;
+    private bool _faulted;
+    private int _saving;
+    private bool _exitHooked;
+
+    public AdaptiveCalibration()
+    {
+        _isActive = false;
+    }
+
+    private static string[] ExpressionNames() =>
+        Enumerable.Range(0, (int)UnifiedExpressions.Max).Select(i => ((UnifiedExpressions)i).ToString()).ToArray();
+
+    public override void Initialize(UnifiedTrackingData data)
+    {
+        if (_exitHooked)
+        {
+            return;
+        }
+
+        _exitHooked = true;
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => SaveNow(blocking: true);
+
+        var modules = UnifiedTracking.Mutator?.LibManager?.LoadedModulesMetadata;
+        if (modules != null)
+        {
+            modules.CollectionChanged += (_, _) => _modulesChanged = true;
+        }
+    }
+
+    public override void MutateData(ref UnifiedTrackingData data)
+    {
+        if (_faulted)
+        {
+            return;
+        }
+
+        try
+        {
+            if (StockCalibrationActive())
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                if (_modulesChanged || _cal == null)
+                {
+                    SelectPriors();
+                }
+
+                var cal = _cal!;
+                cal.LearningEnabled = !pauseLearning;
+                var n = _in.Length;
+                for (var i = 0; i < n; i++)
+                {
+                    _in[i] = data.Shapes[i].Weight;
+                }
+
+                var t = (Stopwatch.GetTimestamp() - _clockStart) / (double)Stopwatch.Frequency;
+                cal.Step(t, _in, _out);
+                for (var i = 0; i < n; i++)
+                {
+                    data.Shapes[i].Weight = _out[i];
+                }
+
+                if (cal.ActiveSeconds - _lastSaveActiveS >= SaveEveryActiveS)
+                {
+                    _lastSaveActiveS = cal.ActiveSeconds;
+                    SaveNow(blocking: false);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            // A calibration bug must never break tracking: stop calibrating, pass data through.
+            _faulted = true;
+            Logger?.LogError(e, "Adaptive Calibration failed and is passing data through unchanged until VRCFaceTracking restarts.");
+        }
+    }
+
+    // Both would scale the same values, so this one steps aside while the stock Calibration is on.
+    private bool StockCalibrationActive()
+    {
+        _stock ??= UnifiedTracking.Mutator?._mutations.OfType<StockCalibration>().FirstOrDefault();
+        var on = _stock?.IsActive ?? false;
+        if (on && !_stockWarned)
+        {
+            _stockWarned = true;
+            Logger?.LogWarning("Adaptive Calibration is paused because Calibration is also on. Switch Calibration off to use Adaptive Calibration.");
+        }
+        else if (!on && _stockWarned)
+        {
+            _stockWarned = false;
+            Logger?.LogInformation("Calibration is off; Adaptive Calibration is running.");
+        }
+
+        return on;
+    }
+
+    // Caller holds _lock. Picks the priors for the expression module and loads its saved state.
+    private void SelectPriors()
+    {
+        _modulesChanged = false;
+        var names = ExpressionNames();
+        var modules = UnifiedTracking.Mutator?.LibManager?.LoadedModulesMetadata.ToArray() ?? [];
+        CalibrationPriors? priors = null;
+        string? key = null;
+        foreach (var m in modules.Where(m => m.Active && m.UsingExpression))
+        {
+            priors = CalibrationPriors.ForModule(m.Name);
+            if (priors != null)
+            {
+                key = m.Name;
+                break;
+            }
+        }
+
+        priors ??= CalibrationPriors.Identity(names);
+        key ??= "identity";
+        if (_cal != null && key == _moduleKey)
+        {
+            return;
+        }
+
+        if (_cal != null)
+        {
+            SaveNow(blocking: true);
+        }
+
+        _moduleKey = key;
+        _cal = new AdaptiveCalibrator(priors.Reorder(names));
+        var path = StatePath(_cal.Priors.Name);
+        var loaded = false;
+        try
+        {
+            if (File.Exists(path))
+            {
+                var s = System.Text.Json.JsonSerializer.Deserialize<CalibrationState>(File.ReadAllText(path));
+                loaded = s != null && _cal.LoadState(s);
+            }
+        }
+        catch (Exception e)
+        {
+            Logger?.LogWarning(e, "Adaptive Calibration couldn't read {Path}; starting from the priors.", path);
+        }
+
+        _lastSaveActiveS = _cal.ActiveSeconds;
+        Logger?.LogInformation(
+            "Adaptive Calibration: priors {Priors} for {Module}; {State}.", _cal.Priors.Name, key,
+            loaded ? $"learned state loaded ({_cal.ActiveSeconds / 3600.0:0.0} active h)" : "no learned state yet");
+    }
+
+    private static string StatePath(string priorsName) =>
+        Path.Combine(StateDirectory, $"state-{Sanitize(priorsName)}.json");
+
+    private static string Sanitize(string s) =>
+        string.Concat(s.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '_'));
+
+    // Snapshot under the lock (cheap), write on a worker unless blocking (exit, priors switch, buttons).
+    private void SaveNow(bool blocking)
+    {
+        CalibrationState state;
+        string path;
+        lock (_lock)
+        {
+            if (_cal == null)
+            {
+                return;
+            }
+
+            state = _cal.SaveState();
+            state.SavedUtc = DateTime.UtcNow;
+            path = StatePath(_cal.Priors.Name);
+        }
+
+        if (blocking)
+        {
+            Write(state, path);
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _saving, 1) == 1)
+        {
+            return; // the previous write is still running; the next interval catches up
+        }
+
+        Task.Run(() =>
+        {
+            try
+            {
+                Write(state, path);
+            }
+            finally
+            {
+                Volatile.Write(ref _saving, 0);
+            }
+        });
+    }
+
+    private void Write(CalibrationState state, string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(StateDirectory);
+            var json = System.Text.Json.JsonSerializer.Serialize(state);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, json, new UTF8Encoding(false));
+            File.Move(tmp, path, overwrite: true);
+
+            var snapDir = Path.Combine(StateDirectory, "snapshots");
+            Directory.CreateDirectory(snapDir);
+            var stem = Path.GetFileNameWithoutExtension(path);
+            var snap = Path.Combine(snapDir, $"{stem}-{DateTime.Now:yyyyMMdd}.json");
+            if (!File.Exists(snap))
+            {
+                File.Copy(path, snap);
+                foreach (var old in Directory.GetFiles(snapDir, stem + "-*.json"))
+                {
+                    if (File.GetLastWriteTime(old) < DateTime.Now.AddDays(-SnapshotDays))
+                    {
+                        File.Delete(old);
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Logger?.LogWarning(e, "Adaptive Calibration couldn't save its state to {Path}.", path);
+        }
+    }
+
+    [MutationButton("Back to starting values")]
+    public void ResetToPriors()
+    {
+        lock (_lock)
+        {
+            if (_cal == null)
+            {
+                Logger?.LogInformation("Adaptive Calibration hasn't started yet; nothing to reset.");
+                return;
+            }
+
+            var path = StatePath(_cal.Priors.Name);
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var keep = Path.Combine(StateDirectory, "snapshots",
+                        $"{Path.GetFileNameWithoutExtension(path)}-before-reset-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+                    Directory.CreateDirectory(Path.GetDirectoryName(keep)!);
+                    File.Copy(path, keep, overwrite: true);
+                }
+            }
+            catch (Exception e)
+            {
+                Logger?.LogWarning(e, "Adaptive Calibration couldn't keep a copy of the old state.");
+            }
+
+            _cal = new AdaptiveCalibrator(_cal.Priors, _cal.Params);
+            _lastSaveActiveS = 0.0;
+            Logger?.LogInformation("Adaptive Calibration is back to the starting values of {Priors} (old state kept in snapshots).", _cal.Priors.Name);
+        }
+
+        SaveNow(blocking: true);
+    }
+
+    [MutationButton("Show what it learned (log)")]
+    public void LogStatus()
+    {
+        lock (_lock)
+        {
+            if (_cal == null)
+            {
+                Logger?.LogInformation("Adaptive Calibration hasn't received tracking data yet.");
+                return;
+            }
+
+            var sb = new StringBuilder();
+            sb.Append(CultureInfo.InvariantCulture,
+                $"Adaptive Calibration: priors {_cal.Priors.Name}, {_cal.ActiveSeconds / 3600.0:0.00} active h, learning {(pauseLearning ? "paused" : "on")}.");
+            var changed = Enumerable.Range(0, _cal.Count).Where(i => Math.Abs(_cal.CeilingRatio(i) - 1.0) > 0.01).ToArray();
+            sb.Append(CultureInfo.InvariantCulture, $" Calmer than the start: {changed.Length} of {_cal.Count} expressions.");
+            foreach (var i in changed.OrderByDescending(i => _cal.CeilingRatio(i)))
+            {
+                sb.Append(CultureInfo.InvariantCulture,
+                    $"\n  {_cal.Priors.Expressions[i]}: {_cal.CeilingRatio(i):0.00}x calmer (ceiling {_cal.Ceiling(i):0.000}, guard {_cal.Guard(i):0.00})");
+            }
+
+            Logger?.LogInformation(sb.ToString());
+        }
+    }
+
+    [MutationButton("Open calibration folder")]
+    public void OpenStateFolder()
+    {
+        Directory.CreateDirectory(StateDirectory);
+        Process.Start(new ProcessStartInfo { FileName = StateDirectory, UseShellExecute = true });
+    }
+}

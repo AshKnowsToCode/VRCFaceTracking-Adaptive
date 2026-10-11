@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Replays a .vftrec through the C# AdaptiveCalibrator for tools/replay/golden_v0.py. Not part of the app or the sln. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(VftTargetFramework)</TargetFramework>
+    <RootNamespace>AdaptiveReplay</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\VRCFaceTracking.Core\VRCFaceTracking.Core.csproj" />
+  </ItemGroup>
+</Project>

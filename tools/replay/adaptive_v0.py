@@ -296,8 +296,9 @@ class AdaptiveCalibrator:
             self.sigma = np.maximum(np.where(ok, sig, self.pr.sigma0), p.sigma_floor)
 
         # 6.3 ceilings
-        slew_up = math.log1p(p.slew_up_per_min) * elapsed / 60.0
-        slew_down = math.log1p(p.slew_per_10min) * elapsed / 600.0
+        # log(1 + x), not log1p: .NET has no true log1p, and the C# port must match bit for bit (golden_v0.py)
+        slew_up = math.log(1.0 + p.slew_up_per_min) * elapsed / 60.0
+        slew_down = math.log(1.0 + p.slew_per_10min) * elapsed / 600.0
         for i in np.nonzero(self.peak_n)[0]:
             k = self.peak_n[i]
             v, ts = self.peak_v[i, :k], self.peak_t[i, :k]

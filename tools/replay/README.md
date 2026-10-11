@@ -22,7 +22,13 @@ python evaluate.py --priors priors/NAME.json --known-good LocalSettings.json [--
 - `stock.py` - exact emulators of the stock Calibration and Unified Correctors (vectorised). Replaying
   `20261008-214509.vftrec` through them reproduces its out block for all 88 shapes to 1e-7 (resets at 40.7, 44.9,
   84.8 s, `warm=True`).
-- `adaptive_v0.py` - the v0 calibrator: `AdaptiveCalibrator(Priors).step(t, x) -> y`. Reference for the C# port.
+- `adaptive_v0.py` - the v0 calibrator: `AdaptiveCalibrator(Priors).step(t, x) -> y`. Golden reference for the C#
+  port (`VRCFaceTracking.Core/Adaptive/Calibration/AdaptiveCalibrator.cs`); change both together.
+- `golden_v0.py` - golden test of the C# port: `python golden_v0.py REC.vftrec ... [--priors P] [--module NAME]
+  [--split 0.5]` builds `AdaptiveReplay/` (a console that replays a .vftrec through the C# calibrator), runs both and
+  requires every output, the per-frame gate and the final ceilings to match (tolerance 1e-4; bit-exact so far).
+  `--module "Virtual Desktop"` uses the priors embedded in the app; `--split` saves the state as JSON mid-way and
+  continues on a fresh calibrator in both languages.
 - `priors.py` - ceiling priors from a trusted stock calibration (floored at 0.15), rest/noise priors from
   recordings, the MouthClosed -> JawOpen coupling ratio.
 - `evaluate.py` - candidates raw / stock_known_good / stock_reset / v0 / v0_identity / v0_noguard. Metrics: lips
