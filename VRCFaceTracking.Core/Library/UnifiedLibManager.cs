@@ -37,7 +37,9 @@ public partial class UnifiedLibManager : ILibManager
         _sendCoordinator = sendCoordinator;
 
         LoadedModulesMetadata = new ObservableCollection<ModuleMetadataInternal>();
-        _sandboxProcessPath = Path.GetFullPath(RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "VRCFaceTracking.ModuleProcess.exe" : "VRCFaceTracking.ModuleProcess");
+        // Adaptive-calibration fork: next to the app, not relative to the working directory (launching from another
+        // folder threw here at startup; UPSTREAM_BUGS.md #6).
+        _sandboxProcessPath = Path.Combine(AppContext.BaseDirectory, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "VRCFaceTracking.ModuleProcess.exe" : "VRCFaceTracking.ModuleProcess");
         if ( !File.Exists(_sandboxProcessPath) )
         {
             // @TODO: Better error handling

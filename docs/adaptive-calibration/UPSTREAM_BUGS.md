@@ -9,6 +9,8 @@ to upstream `master` at 6432e6a (2026-09-11). None reported yet.
 | 2 | Data Filter sliders are never saved | Annoyance, every restart | Fixed |
 | 3 | Parameter Adjustment "Reset Values" does nothing | Annoyance | Not fixed |
 | 4 | Data Filter and Calibration assume 10 Hz updates (a 10 ms / 10 Hz mix-up) | Wrong slider units; feel depends on frame rate | Not fixed |
+| 5 | Building a mutation's settings UI walks every field recursively; one throw kills the app at startup | Crash at startup (latent for the built-in mutations) | Guarded |
+| 6 | Sandbox process found relative to the working directory | Crash at startup when launched from another folder | Fixed |
 
 ## 1. Mutation run order not guaranteed; Initialize() races the load
 
@@ -85,6 +87,36 @@ to upstream `master` at 6432e6a (2026-09-11). None reported yet.
   - **Calibration:** plugging the real frame time into `dT` makes it worse. The per-frame sampling threshold drops
     from 0.015 to about 0.002, so the 64-sample window fills in about a second of movement and the maxima freeze from
     that. It needs a time-based threshold instead (e.g. compare against the value 100 ms ago).
+
+## 5. Building a mutation's settings UI walks every field recursively; one throw kills the app at startup
+
+- **Where:** `VRCFaceTracking.Core/Params/Data/Mutation/UI/MutationFactory.cs:67-129` (`ProcessFields`), called from
+  `TrackingMutation.CreateProperties()` in `UnifiedTrackingMutator.CreateMutation` (line 126, outside its try blocks).
+- **What:** `ProcessFields` takes every field of the mutation (`Public | NonPublic | Instance | Static`) and recurses
+  into any non-null object a field holds (line 118-124), then into that object's fields and statics, and so on. It
+  only needs the `[MutationProperty]` fields and `[MutationButton]` methods.
+- **Consequence:**
+  - A mutation that holds an ordinary framework object in any field when it loads (found with a static
+    `System.Text.Json.JsonSerializerOptions`) sends it deep into framework internals until something throws
+    (`NullReferenceException` at line 123 here).
+  - The throw leaves `CreateMutation` and the `async void Load()`, so the whole app exits at startup with an
+    unhandled exception and no log line saying which mutation.
+  - The built-in mutations survive because their fields happen to be simple. Any new or third-party mutation is one
+    field away from it; the walk also does needless work on large object graphs.
+- **Fork:** `CreateMutation` now catches the throw, logs which mutation failed and gives it an empty settings list
+  (the app keeps running). The walk itself is unchanged; the Adaptive Calibration mutation keeps its runtime objects
+  out of fields at load (comment in `AdaptiveCalibration.cs`). For upstream: only recurse into fields that carry
+  `[MutationProperty]`, or only into types from the mutation's own assembly, and catch per mutation.
+
+## 6. Sandbox process found relative to the working directory
+
+- **Where:** `VRCFaceTracking.Core/Library/UnifiedLibManager.cs:40`.
+- **What:** `Path.GetFullPath("VRCFaceTracking.ModuleProcess.exe")` resolves against the current working directory,
+  not the app's folder.
+- **Consequence:** starting `VRCFaceTracking.exe` from any other folder (a script, a terminal, a shortcut whose
+  "Start in" is elsewhere) throws `FileNotFoundException: Failed to find sandbox process` while the main page is
+  being created, and the app exits. Seen on 2026-10-11 when launching the fork's build from a terminal.
+- **Fork fix:** `Path.Combine(AppContext.BaseDirectory, ...)`.
 
 ## Also see
 

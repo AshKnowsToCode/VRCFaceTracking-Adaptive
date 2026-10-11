@@ -141,7 +141,17 @@ public partial class UnifiedTrackingMutator : ObservableObject
 
         mutation.Logger = _logger;
         mutation.LocalSettingsService =  _localSettingsService;
-        mutation.CreateProperties();
+        // Adaptive-calibration fork: building a mutation's settings UI walks all of its fields recursively and could
+        // throw out of this async chain, which took the whole app down at startup (UPSTREAM_BUGS.md #5).
+        try
+        {
+            mutation.CreateProperties();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Failed to build the settings of {mutation.Name}");
+            mutation.Components = new ObservableCollection<IMutationComponent>();
+        }
 
         try
         {
