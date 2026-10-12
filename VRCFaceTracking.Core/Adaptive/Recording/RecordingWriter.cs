@@ -17,7 +17,7 @@ namespace VRCFaceTracking.Core.Adaptive.Recording;
 /// Writes <see cref="RecordingFormat"/> files for a <see cref="SessionRecorder"/>. Producers (tracking thread, mic
 /// thread, UI) only enqueue and never block: a full queue drops the record and counts it. One background thread
 /// compresses and writes, opens a file on the first frame, rotates it hourly, closes it when the recorder is switched
-/// off or frames stop for a minute, and logs tracking/focus/drop events.
+/// off or frames stop for a minute, and logs tracking/focus/drop events and mutations switched on or off.
 /// </summary>
 public sealed class RecordingWriter
 {
@@ -62,6 +62,7 @@ public sealed class RecordingWriter
     private string _trackingState = "ok";
     private string? _focus;
     private long _nextFocusProbe;
+    private string? _activeMutations;
     private MicLevelMonitor? _mic;
     private string _micFilter = "";
     private string? _spaceCheckedDirectory;
@@ -260,6 +261,13 @@ public sealed class RecordingWriter
             _droppedReported = dropped;
         }
 
+        // A mutation switched on or off since the header (Adaptive Calibration, the stock Calibration in an A/B, ...).
+        if (DescribeActiveMutations() is { } active && active != _activeMutations)
+        {
+            _activeMutations = active;
+            WriteText(RecordingFormat.GateRecord, now, "mutations:" + active);
+        }
+
         if (now >= _nextFocusProbe)
         {
             _nextFocusProbe = now + Ticks(FocusProbeEvery);
@@ -322,6 +330,7 @@ public sealed class RecordingWriter
             _sessionStartTick = firstTick;
         }
 
+        _activeMutations = DescribeActiveMutations(); // before the header: a change in between is logged, never lost
         var header = BuildHeader(firstTick);
         var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 16);
         try
@@ -579,6 +588,20 @@ public sealed class RecordingWriter
             // Collection changed under us (a "modules:" event follows) or no mutator yet.
         }
         return result.ToString(Formatting.None);
+    }
+
+    /// <summary> Active mutations in run order as a JSON array string ("mutations:" events); null if the list changed under us. </summary>
+    private static string? DescribeActiveMutations()
+    {
+        try
+        {
+            var mutations = UnifiedTracking.Mutator?._mutations.ToArray() ?? [];
+            return new JArray(mutations.Where(m => m.IsActive).Select(m => m.Name).ToArray()).ToString(Formatting.None);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     // Settings snapshot of every mutation in run order. "properties" holds all UI-exposed fields, statics included

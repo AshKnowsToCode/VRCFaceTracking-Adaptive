@@ -14,5 +14,17 @@ public static class GuidedTap
 
     public static bool HasListeners => RawFrame != null;
 
+    private static volatile bool _measuring;
+
+    /// <summary>
+    /// True while a guided calibration is measuring poses. Adaptive Calibration keeps calibrating then but doesn't learn:
+    /// the poses are deliberate maximum efforts, not normal use (set by <see cref="GuidedSession"/>).
+    /// </summary>
+    public static bool Measuring
+    {
+        get => _measuring;
+        set => _measuring = value;
+    }
+
     public static void Publish(double t, ReadOnlySpan<float> raw) => RawFrame?.Invoke(t, raw);
 }

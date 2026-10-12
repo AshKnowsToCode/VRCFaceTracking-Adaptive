@@ -89,7 +89,15 @@ then a raw deflate stream of little-endian records `type:u8, tick:i64 (QPC), pay
 
 Event kinds: `tracking:zeros|frozen|ok` (all-zero frames, or no shape moving > 1e-4 for 0.5 s), `focus:vrchat|vrcft|other|none`
 (foreground app, category only), `modules:[...]`, `audio:device ...|on ...|off|no_device|device_changed|error ...`,
-`recorder:dropped N|stop <exit|rotate|idle|disabled|error>`.
+`recorder:dropped N|stop <exit|rotate|idle|disabled|error>`, `mutations:[...]` (active mutations in run order, written
+when one is switched on or off; the header holds the state at file start).
+Adaptive Calibration: `adaptive:priors <name>; learned <s> active s|no learned state` (the calibrator (re)started on
+these starting values), `adaptive:guided applied <name>` (a kept guided run replaced them), `adaptive:reset <name>`,
+`adaptive:forgot guided <file>`, `adaptive:learning paused|paused for the guided calibration|on`, `adaptive:faulted`.
+Guided calibration: `guided:start <module>; <n> steps`, `guided:pose|retry|redo <pose>` (a step begins),
+`guided:filled <pose> <s>`, `guided:ask <pose> <reason>`, `guided:resumed <pose>`, `guided:skip <pose>`,
+`guided:pause|unpause`, `guided:summary`, `guided:summary after redo`, `guided:redo stopped <pose>`, `guided:stop`,
+`guided:keep|discard <report file>`.
 
 The header holds the QPC frequency, session id and file index, a QPC/UTC clock pair, module names, expression and
 channel names, and a settings snapshot of every mutation in run order (UI fields including statics, plus the saved

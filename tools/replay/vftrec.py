@@ -270,6 +270,8 @@ def _print_info(rec: Recording, shapes: bool) -> None:
     for tick, kind, detail in rec.events:
         if kind == "modules":
             detail = ", ".join(m["name"] for m in json.loads(detail) if m.get("active")) or "(none active)"
+        elif kind == "mutations":
+            detail = " > ".join(json.loads(detail)) or "(none active)"
         print(f"  {rec.seconds(tick):9.2f} s  {kind}: {detail}")
 
     if shapes and n:

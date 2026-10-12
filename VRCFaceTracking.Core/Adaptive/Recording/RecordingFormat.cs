@@ -15,7 +15,8 @@ namespace VRCFaceTracking.Core.Adaptive.Recording;
 /// (after all mutations). A block is <see cref="Channels"/> followed by every expression in enum order.</item>
 /// <item>A audio: float32 RMS level in dBFS of one 10 ms capture block; the tick is the block's end.</item>
 /// <item>M marker: uint16 byte count, UTF-8 label.</item>
-/// <item>G gate/event: uint16 byte count, UTF-8 "kind:detail" (tracking, focus, modules, audio, recorder).</item>
+/// <item>G gate/event: uint16 byte count, UTF-8 "kind:detail" (tracking, focus, modules, mutations, audio, recorder,
+/// adaptive, guided).</item>
 /// </list>
 /// The writer sync-flushes every few seconds, so a killed process leaves a readable file cut off mid-record.
 /// </remarks>

@@ -142,6 +142,19 @@ public class SessionRecorder : TrackingMutation, IMutationOutputObserver
         Logger?.LogInformation("Recorder marker {Number}: {Label}", number, label);
     }
 
+    /// <summary>
+    /// Adds a "kind:detail" event to the recording, e.g. from Adaptive Calibration or the guided calibration, so
+    /// offline tools can line them up with the frames. Never blocks; dropped when nothing is being recorded.
+    /// </summary>
+    public static void LogEvent(string kind, string detail)
+    {
+        var recorder = Current;
+        if (recorder is { _faulted: false, IsActive: true })
+        {
+            recorder._writer?.EnqueueEvent(kind + ":" + detail);
+        }
+    }
+
     [MutationButton("Open recordings folder")]
     public void OpenRecordingsFolder()
     {

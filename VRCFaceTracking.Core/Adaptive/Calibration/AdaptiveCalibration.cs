@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using VRCFaceTracking.Core.Adaptive.Guided;
+using VRCFaceTracking.Core.Adaptive.Recording;
 using VRCFaceTracking.Core.Params.Data;
 using VRCFaceTracking.Core.Params.Data.Mutation;
 using VRCFaceTracking.Core.Params.Expressions;
@@ -124,7 +125,17 @@ public class AdaptiveCalibration : TrackingMutation
                 }
 
                 var cal = _cal!;
-                cal.LearningEnabled = !pauseLearning;
+                // a guided calibration's poses are calibrated as usual but never learned from (GuidedTap.Measuring)
+                var guided = GuidedTap.Measuring;
+                var learning = !pauseLearning && !guided;
+                if (learning != cal.LearningEnabled)
+                {
+                    var what = learning ? "learning on" : guided ? "learning paused for the guided calibration" : "learning paused";
+                    SessionRecorder.LogEvent("adaptive", what);
+                    Logger?.LogInformation("Adaptive Calibration: {What}.", what);
+                }
+
+                cal.LearningEnabled = learning;
                 cal.Step(t, _in, _out);
                 for (var i = 0; i < n; i++)
                 {
@@ -143,6 +154,7 @@ public class AdaptiveCalibration : TrackingMutation
             // A calibration bug must never break tracking: stop calibrating, pass data through.
             _faulted = true;
             Logger?.LogError(e, "Adaptive Calibration failed and is passing data through unchanged until VRCFaceTracking restarts.");
+            SessionRecorder.LogEvent("adaptive", "faulted");
         }
     }
 
@@ -230,6 +242,9 @@ public class AdaptiveCalibration : TrackingMutation
         Logger?.LogInformation(
             "Adaptive Calibration: priors {Priors} for {Module}; {State}.", _cal.Priors.Name, key,
             loaded ? $"learned state loaded ({_cal.ActiveSeconds / 3600.0:0.0} active h)" : "no learned state yet");
+        SessionRecorder.LogEvent("adaptive", $"priors {_cal.Priors.Name}; " + (loaded
+            ? string.Create(CultureInfo.InvariantCulture, $"learned {_cal.ActiveSeconds:0.0} active s")
+            : "no learned state"));
     }
 
     public static string PersonalPriorsPath(string moduleKey) =>
@@ -288,6 +303,7 @@ public class AdaptiveCalibration : TrackingMutation
 
             _lastSaveActiveS = 0.0;
             Logger?.LogInformation("Adaptive Calibration now starts from your guided calibration ({Priors}).", priors.Name);
+            SessionRecorder.LogEvent("adaptive", "guided applied " + priors.Name);
         }
 
         SaveNow(blocking: true);
@@ -402,6 +418,7 @@ public class AdaptiveCalibration : TrackingMutation
             _cal = new AdaptiveCalibrator(_cal.Priors, _cal.Params);
             _lastSaveActiveS = 0.0;
             Logger?.LogInformation("Adaptive Calibration is back to the starting values of {Priors} (old state kept in snapshots).", _cal.Priors.Name);
+            SessionRecorder.LogEvent("adaptive", "reset " + _cal.Priors.Name);
         }
 
         SaveNow(blocking: true);
@@ -435,6 +452,7 @@ public class AdaptiveCalibration : TrackingMutation
         }
 
         Logger?.LogInformation("Adaptive Calibration forgot the guided calibration (copy kept in snapshots); back to the module's starting values.");
+        SessionRecorder.LogEvent("adaptive", "forgot guided " + Path.GetFileNameWithoutExtension(path));
     }
 
     [MutationButton("Show what it learned (log)")]

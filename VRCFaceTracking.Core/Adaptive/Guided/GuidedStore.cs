@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using VRCFaceTracking.Core.Adaptive.Calibration;
+using VRCFaceTracking.Core.Adaptive.Recording;
 
 namespace VRCFaceTracking.Core.Adaptive.Guided;
 
@@ -78,6 +79,7 @@ public static class GuidedStore
 
         var path = Path.Combine(Folder, $"run-{r.Started:yyyyMMdd-HHmmss}.json");
         File.WriteAllText(path, report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        SessionRecorder.LogEvent("guided", (kept ? "keep " : "discard ") + Path.GetFileName(path));
         return path;
     }
 

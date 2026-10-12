@@ -1,4 +1,6 @@
+using System.Globalization;
 using VRCFaceTracking.Core.Adaptive.Calibration;
+using VRCFaceTracking.Core.Adaptive.Recording;
 
 namespace VRCFaceTracking.Core.Adaptive.Guided;
 
@@ -112,6 +114,7 @@ public sealed class GuidedSession : IDisposable
     public const double FrozenS = 0.5;
     public const double FollowAfter = 3; // the reference follows the person after this many poses
     public const double FollowMin = 0.3;
+    public const double LeftAloneS = 60.0; // a question unanswered this long: the person went back to normal use
     private const double MaxDt = 0.1;
 
     private readonly object _lock = new();
@@ -187,16 +190,17 @@ public sealed class GuidedSession : IDisposable
 
             _phase = GuidedPhase.Intro;
             _phaseTime = 0.0;
+            Log($"start {_info.ModuleKey}; {_poses.Count} steps");
             _message = "Get comfortable. Each face: hold it until the ring is full.";
             cues.Add(new GuidedCue(GuidedCueKind.Speak,
                 "Face calibration. Make each face at full strength, but comfortably, and hold it until the chime."));
-            Publish();
-        }
+            if (!_subscribed)
+            {
+                _subscribed = true;
+                GuidedTap.RawFrame += OnFrame;
+            }
 
-        if (!_subscribed)
-        {
-            _subscribed = true;
-            GuidedTap.RawFrame += OnFrame;
+            Publish();
         }
 
         Raise(cues);
@@ -213,6 +217,7 @@ public sealed class GuidedSession : IDisposable
         }
         else if (_phase is GuidedPhase.Hold or GuidedPhase.Ask && _outcome != null)
         {
+            Log("skip " + _outcome.Id);
             _outcome.Skipped = true;
             LeavePose();
             Next();
@@ -227,7 +232,15 @@ public sealed class GuidedSession : IDisposable
         }
     });
 
-    public void SetPaused(bool paused) => Command(() => _pausedByUser = paused);
+    public void SetPaused(bool paused) => Command(() =>
+    {
+        if (paused != _pausedByUser)
+        {
+            Log(paused ? "pause" : "unpause");
+        }
+
+        _pausedByUser = paused;
+    });
 
     /// <summary> Stops the run; during a redo it only stops the redo (back to the summary, earlier result kept). </summary>
     public void Cancel()
@@ -241,6 +254,7 @@ public sealed class GuidedSession : IDisposable
                 return;
             }
 
+            Log("stop");
             _phase = GuidedPhase.Cancelled;
             cancelled = true;
         });
@@ -282,6 +296,7 @@ public sealed class GuidedSession : IDisposable
 
     private void AbortRedo()
     {
+        Log("redo stopped " + _poses[_index].Id);
         _redoing = false;
         _ring = null;
         _phase = GuidedPhase.Summary;
@@ -291,10 +306,15 @@ public sealed class GuidedSession : IDisposable
 
     public void Dispose()
     {
-        if (_subscribed)
+        // under the lock: a frame still in flight must not set Measuring again after this clears it
+        lock (_lock)
         {
-            _subscribed = false;
-            GuidedTap.RawFrame -= OnFrame;
+            if (_subscribed)
+            {
+                _subscribed = false;
+                GuidedTap.RawFrame -= OnFrame;
+                GuidedTap.Measuring = false;
+            }
         }
     }
 
@@ -315,6 +335,9 @@ public sealed class GuidedSession : IDisposable
     }
 
     private void Say(string text) => _pending.Add(new GuidedCue(GuidedCueKind.Speak, text));
+
+    // "guided:..." events in the session recording, so a run can be lined up with the frames offline
+    private static void Log(string detail) => SessionRecorder.LogEvent("guided", detail);
 
     private void Raise(List<GuidedCue> cues)
     {
@@ -469,6 +492,7 @@ public sealed class GuidedSession : IDisposable
 
         if (ring.Done)
         {
+            Log(string.Create(CultureInfo.InvariantCulture, $"filled {pose.Id} {ring.Elapsed:0.00}"));
             _outcome!.Done = true;
             _outcome.FilledS = ring.Elapsed;
             _pending.Add(new GuidedCue(GuidedCueKind.Chime));
@@ -488,6 +512,7 @@ public sealed class GuidedSession : IDisposable
         {
             _lastAskAt = _phaseTime;
             var reason = AskReason(ring, pose);
+            Log($"ask {pose.Id} {reason.Key}");
             _outcome!.Asks.Add(reason.Key);
             _phase = GuidedPhase.Ask;
             _askFill = fill;
@@ -496,6 +521,7 @@ public sealed class GuidedSession : IDisposable
         }
         else if (_phase == GuidedPhase.Ask && fill - _askFill >= ResumeProgress)
         {
+            Log("resumed " + pose.Id);
             _phase = GuidedPhase.Hold; // doing the face again answers the question
         }
     }
@@ -549,6 +575,7 @@ public sealed class GuidedSession : IDisposable
         _saidOtherWay = false;
         _outcome = retry && _outcome != null && _outcome.Id == pose.Id ? _outcome : new PoseOutcome { Id = pose.Id };
         _measure = new PoseMeasure(pose.Id, _names, pose.IsRelax);
+        Log((retry ? "retry " : _redoing ? "redo " : "pose ") + pose.Id);
         _message = pose.Prompt;
         Say(retry ? "Again. " + pose.Prompt : pose.Prompt);
         if (pose.IsRelax)
@@ -690,6 +717,7 @@ public sealed class GuidedSession : IDisposable
             RunsCombined = runs.Count,
         };
         _phase = GuidedPhase.Summary;
+        Log(redo ? "summary after redo" : "summary");
         _message = "All done.";
         _ring = null;
         Say(redo ? "Updated. Have a look at the summary." : "All done. Have a look at the summary before you keep it.");
@@ -746,7 +774,22 @@ public sealed class GuidedSession : IDisposable
         return rows;
     }
 
-    private void Publish() => Volatile.Write(ref _snapshot, MakeSnapshot());
+    private void Publish()
+    {
+        Volatile.Write(ref _snapshot, MakeSnapshot());
+        if (_subscribed)
+        {
+            GuidedTap.Measuring = IsMeasuring();
+        }
+    }
+
+    // Adaptive Calibration doesn't learn from the poses (they'd count as everyday expressions, and a discarded run
+    // would still change the values in use). Not at the summary, while paused, or once a question has gone unanswered
+    // for a minute: a run never skips by itself, so someone who walked away from it is back to normal use.
+    private bool IsMeasuring() =>
+        !_pausedByUser &&
+        (_phase is GuidedPhase.Intro or GuidedPhase.Relax or GuidedPhase.Hold or GuidedPhase.Got ||
+         _phase == GuidedPhase.Ask && _phaseTime - _lastAskAt < LeftAloneS);
 
     private GuidedSnapshot MakeSnapshot() => new(
         _phase,
