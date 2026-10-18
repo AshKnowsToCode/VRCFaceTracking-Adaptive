@@ -32,6 +32,9 @@ public class MainStandalone : IMainService
     public async Task Teardown()
     {
         _logger.LogInformation("VRCFT Standalone Exiting!");
+        // Adaptive-calibration fork: calibration state and the open recording first. A Windows shutdown ended the app
+        // a few seconds into teardown, before ProcessExit (2026-10-12): learning lost, recording cut.
+        _mutator.NotifyTeardown();
         await _mutator.Save();
 
         await _libManager.TeardownAllModules();

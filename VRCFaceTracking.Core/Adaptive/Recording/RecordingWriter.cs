@@ -17,7 +17,8 @@ namespace VRCFaceTracking.Core.Adaptive.Recording;
 /// Writes <see cref="RecordingFormat"/> files for a <see cref="SessionRecorder"/>. Producers (tracking thread, mic
 /// thread, UI) only enqueue and never block: a full queue drops the record and counts it. One background thread
 /// compresses and writes, opens a file on the first frame, rotates it hourly, closes it when the recorder is switched
-/// off or frames stop for a minute, and logs tracking/focus/drop events and mutations switched on or off.
+/// off, frames stop for a minute or the app tears down, and logs tracking/focus/drop events and mutations switched on or
+/// off. Events that arrive while no file is open are held for the next file.
 /// </summary>
 public sealed class RecordingWriter
 {
@@ -31,8 +32,14 @@ public sealed class RecordingWriter
     private static readonly TimeSpan FrozenAfter = TimeSpan.FromSeconds(0.5);   // DESIGN.md 6.1
     private const float FrozenEpsilon = 1e-4f;
     private const int QueueCapacity = 8192;   // ~40 s of 90 Hz frames plus 100 Hz mic levels
+    private const int HeldEventsMax = 64;
+    private static readonly TimeSpan ReopenAfterTeardown = TimeSpan.FromSeconds(10);
 
-    private readonly record struct Record(byte Type, long Tick, float[]? Frame, float Level, string? Text);
+    // Not a file record: asks the writer thread to close the current file (CloseFileNow).
+    private const byte CloseRequest = 0;
+
+    private readonly record struct Record(
+        byte Type, long Tick, float[]? Frame, float Level, string? Text, ManualResetEventSlim? Done = null);
 
     private readonly SessionRecorder _owner;
     private readonly ILogger _logger;
@@ -47,6 +54,10 @@ public sealed class RecordingWriter
     private long _sessionStartTick;
     private int _fileIndex;
     private string? _previousFileName;
+
+    // Events logged while no file was open (Adaptive Calibration logs its starting values on the first frame, before
+    // that frame opens the file; idle gaps). Written at the top of the next file with their own time.
+    private readonly Queue<(long Tick, string Text)> _heldEvents = new();
 
     // Current file.
     private Stream? _out;
@@ -98,6 +109,20 @@ public sealed class RecordingWriter
 
     public void EnqueueEvent(string text) =>
         TryEnqueue(new Record(RecordingFormat.GateRecord, Stopwatch.GetTimestamp(), null, 0, text));
+
+    /// <summary>
+    /// Writes what is queued and closes the current file now, waiting up to <paramref name="timeout"/> (app teardown;
+    /// ProcessExit never comes when Windows ends the app during a shutdown). Frames that still arrive while the app
+    /// exits don't open a new file for 10 s; after a re-init the recorder carries on in a new file of the same session.
+    /// </summary>
+    public void CloseFileNow(string reason, TimeSpan timeout)
+    {
+        var done = new ManualResetEventSlim();   // not disposed: the writer may still set it after a timeout
+        if (TryEnqueue(new Record(CloseRequest, Stopwatch.GetTimestamp(), null, 0, reason, done)))
+        {
+            done.Wait(timeout);
+        }
+    }
 
     /// <summary> Writes what is queued, closes the file and stops the thread. Safe to call more than once. </summary>
     public void Shutdown(TimeSpan timeout)
@@ -180,6 +205,20 @@ public sealed class RecordingWriter
 
     private void Handle(Record record)
     {
+        if (record.Type == CloseRequest)
+        {
+            try
+            {
+                _cooldownUntil = Math.Max(_cooldownUntil, record.Tick + Ticks(ReopenAfterTeardown));
+                CloseFile(record.Text!);
+            }
+            finally
+            {
+                record.Done?.Set();
+            }
+            return;
+        }
+
         if (record.Type == RecordingFormat.FrameRecord)
         {
             if (!_owner.IsActive || record.Tick < _cooldownUntil)
@@ -211,7 +250,16 @@ public sealed class RecordingWriter
 
         if (_out == null)
         {
-            return;   // Not recording: mic levels and events have nowhere to go.
+            // Not recording: mic levels have nowhere to go; events wait for the next file.
+            if (record.Type == RecordingFormat.GateRecord)
+            {
+                if (_heldEvents.Count == HeldEventsMax)
+                {
+                    _heldEvents.Dequeue();
+                }
+                _heldEvents.Enqueue((record.Tick, record.Text!));
+            }
+            return;
         }
 
         switch (record.Type)
@@ -359,6 +407,10 @@ public sealed class RecordingWriter
         {
             // Rotation keeps the mic running; note its device at the top of the new file.
             WriteText(RecordingFormat.GateRecord, firstTick, "audio:on " + _mic.DeviceDescription);
+        }
+        while (_heldEvents.TryDequeue(out var held))
+        {
+            WriteText(RecordingFormat.GateRecord, held.Tick, held.Text);
         }
         _recording = true;
         _logger.LogInformation("Session Recorder: recording to {Path}", path);

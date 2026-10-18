@@ -21,7 +21,7 @@ namespace VRCFaceTracking.Core.Adaptive.Calibration;
 /// LocalSettings.json: written atomically every 60 active seconds and on exit, with one snapshot per day kept 14
 /// days. It does nothing while the stock Calibration is on (both would scale the same values).
 /// </remarks>
-public class AdaptiveCalibration : TrackingMutation
+public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
 {
     [MutationProperty("Pause learning (keep the current values)", true)]
     public bool pauseLearning = false;
@@ -52,6 +52,7 @@ public class AdaptiveCalibration : TrackingMutation
     // recurses into the objects they hold when the UI is built at load. Keep runtime objects null until the first
     // frame and never hold framework objects (JsonSerializerOptions crashed it) or other mutations in a field then.
     private readonly object _lock = new();
+    private readonly object _writeLock = new();   // the periodic save on a worker vs a blocking one
     private AdaptiveCalibrator? _cal;
     private string? _moduleKey;
     private bool _modulesChanged = true;
@@ -88,6 +89,15 @@ public class AdaptiveCalibration : TrackingMutation
         if (modules != null)
         {
             modules.CollectionChanged += (_, _) => _modulesChanged = true;
+        }
+    }
+
+    // First thing in teardown: a Windows shutdown ends the app before ProcessExit (2026-10-12, ~38 active s lost).
+    public void OnTeardown()
+    {
+        if (SaveNow(blocking: true))
+        {
+            Logger?.LogInformation("Adaptive Calibration: state saved for shutdown.");
         }
     }
 
@@ -315,8 +325,9 @@ public class AdaptiveCalibration : TrackingMutation
     private static string Sanitize(string s) =>
         string.Concat(s.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '_'));
 
-    // Snapshot under the lock (cheap), write on a worker unless blocking (exit, priors switch, buttons).
-    private void SaveNow(bool blocking)
+    // Snapshot under the lock (cheap), write on a worker unless blocking (exit, priors switch, buttons). Blocking:
+    // whether the state reached the disk.
+    private bool SaveNow(bool blocking)
     {
         CalibrationState state;
         string path;
@@ -324,7 +335,7 @@ public class AdaptiveCalibration : TrackingMutation
         {
             if (_cal == null)
             {
-                return;
+                return false;
             }
 
             state = _cal.SaveState();
@@ -334,13 +345,12 @@ public class AdaptiveCalibration : TrackingMutation
 
         if (blocking)
         {
-            Write(state, path);
-            return;
+            return Write(state, path);
         }
 
         if (Interlocked.Exchange(ref _saving, 1) == 1)
         {
-            return; // the previous write is still running; the next interval catches up
+            return false; // the previous write is still running; the next interval catches up
         }
 
         Task.Run(() =>
@@ -354,9 +364,18 @@ public class AdaptiveCalibration : TrackingMutation
                 Volatile.Write(ref _saving, 0);
             }
         });
+        return true;
     }
 
-    private void Write(CalibrationState state, string path)
+    private bool Write(CalibrationState state, string path)
+    {
+        lock (_writeLock)
+        {
+            return WriteLocked(state, path);
+        }
+    }
+
+    private bool WriteLocked(CalibrationState state, string path)
     {
         try
         {
@@ -381,10 +400,12 @@ public class AdaptiveCalibration : TrackingMutation
                     }
                 }
             }
+            return true;
         }
         catch (Exception e)
         {
             Logger?.LogWarning(e, "Adaptive Calibration couldn't save its state to {Path}.", path);
+            return false;
         }
     }
 

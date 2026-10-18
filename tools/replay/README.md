@@ -89,8 +89,12 @@ then a raw deflate stream of little-endian records `type:u8, tick:i64 (QPC), pay
 
 Event kinds: `tracking:zeros|frozen|ok` (all-zero frames, or no shape moving > 1e-4 for 0.5 s), `focus:vrchat|vrcft|other|none`
 (foreground app, category only), `modules:[...]`, `audio:device ...|on ...|off|no_device|device_changed|error ...`,
-`recorder:dropped N|stop <exit|rotate|idle|disabled|error>`, `mutations:[...]` (active mutations in run order, written
-when one is switched on or off; the header holds the state at file start).
+`recorder:dropped N|stop <exit|rotate|idle|disabled|low_disk|error>`, `mutations:[...]` (active mutations in run order,
+written when one is switched on or off; the header holds the state at file start). Events logged while no file is open
+(before the first frame, or between files) are written at the top of the next file with their own time, so they can be
+slightly before its first frame (e.g. `adaptive:priors` at -0.01 s). The file is closed first thing when the app shuts
+down (`stop exit`): a Windows shutdown ends the app before process exit; after "force re-init" recording carries on in
+a new file of the same session 10 s later.
 Adaptive Calibration: `adaptive:priors <name>; learned <s> active s|no learned state` (the calibrator (re)started on
 these starting values), `adaptive:guided applied <name>` (a kept guided run replaced them), `adaptive:reset <name>`,
 `adaptive:forgot guided <file>`, `adaptive:learning paused|paused for the guided calibration|on`, `adaptive:faulted`.

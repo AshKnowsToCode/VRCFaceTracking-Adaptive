@@ -17,7 +17,7 @@ namespace VRCFaceTracking.Core.Adaptive.Recording;
 /// The tracking thread only copies floats into a pooled buffer and enqueues it; <see cref="RecordingWriter"/> does
 /// everything else on its own thread. A recording file opens on the first frame after the recorder is switched on.
 /// </remarks>
-public class SessionRecorder : TrackingMutation, IMutationOutputObserver
+public class SessionRecorder : TrackingMutation, IMutationOutputObserver, IMutationTeardownHandler
 {
     // A changed folder applies from the next file.
     [MutationProperty(@"Recordings folder (blank = Documents\VRCFaceTracking-Adaptive\recordings)")]
@@ -161,6 +161,9 @@ public class SessionRecorder : TrackingMutation, IMutationOutputObserver
         Directory.CreateDirectory(RecordingsDirectory);
         Process.Start(new ProcessStartInfo { FileName = RecordingsDirectory, UseShellExecute = true });
     }
+
+    // First thing in teardown: a Windows shutdown ends the app before ProcessExit, which left the file cut (2026-10-12).
+    public void OnTeardown() => _writer?.CloseFileNow("exit", TimeSpan.FromSeconds(1));
 
     /// <summary> Closes the current file and stops the writer (also runs on process exit). </summary>
     public void Shutdown(TimeSpan timeout) => _writer?.Shutdown(timeout);

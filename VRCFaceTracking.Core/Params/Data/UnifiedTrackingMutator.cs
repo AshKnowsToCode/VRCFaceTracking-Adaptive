@@ -75,6 +75,36 @@ public partial class UnifiedTrackingMutator : ObservableObject
         return _inputBuffer;
     }
 
+    /// <summary>
+    /// Adaptive-calibration fork: runs every mutation's <see cref="IMutationTeardownHandler"/>. MainStandalone calls this
+    /// first in Teardown.
+    /// </summary>
+    public void NotifyTeardown()
+    {
+        List<TrackingMutation> mutations;
+        lock (_mutationsLock)
+        {
+            mutations = _mutations.ToList();
+        }
+
+        foreach (var mutation in mutations)
+        {
+            if (mutation is not IMutationTeardownHandler handler)
+            {
+                continue;
+            }
+
+            try
+            {
+                handler.OnTeardown();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"{mutation.Name} failed during teardown");
+            }
+        }
+    }
+
     public async Task Save()
     {
         _logger.LogDebug("Saving mutation configuration...");
