@@ -57,7 +57,10 @@ public sealed class AdaptiveCalibrator
     private readonly bool[] _epBad;
     private readonly double[] _satRun; // current pinned run length, active seconds
     private readonly double[] _satShort; // decayed seconds spent in short pinned runs
-    private readonly double[] _aboveAcc; // decayed seconds above theta
+    private readonly double[] _aboveAcc; // decayed seconds busy (shown >= GuardBusyLevel, or above theta)
+    private readonly double[] _satNew; // seconds in short pinned runs since this shape's last guardrail step
+    private readonly double[] _pinMin; // [_n * _pinSlots] active minute of the latest short pin per slot (minute % slots)
+    private readonly int _pinSlots;
 
     // scratch
     private readonly double[] _x;
@@ -91,7 +94,7 @@ public sealed class AdaptiveCalibrator
         _c = (double[])_c0.Clone();
         _g = Enumerable.Repeat(1.0, _n).ToArray();
         _b = (double[])priors.B0.Clone();
-        _sigma = priors.Sigma0.Select(s => Math.Max(s, _p.SigmaFloor)).ToArray();
+        _sigma = priors.Sigma0.Select(s => Math.Min(Math.Max(s, _p.SigmaFloor), _p.SigmaMax)).ToArray();
         _hist = new double[_n * _bins];
         _peakV = new double[_n * _keep];
         _peakT = new double[_n * _keep];
@@ -106,6 +109,10 @@ public sealed class AdaptiveCalibrator
         _satRun = new double[_n];
         _satShort = new double[_n];
         _aboveAcc = new double[_n];
+        _satNew = new double[_n];
+        _pinSlots = Math.Max(_p.GuardMinutes, 1);
+        _pinMin = new double[_n * _pinSlots];
+        Array.Fill(_pinMin, -1e9);
 
         _x = new double[_n];
         _h = new double[_n];
@@ -335,13 +342,22 @@ public sealed class AdaptiveCalibrator
         if (p.Guardrail && learn)
         {
             var w = Math.Pow(2.0, -adt / p.GuardWindowS);
+            var minute = Math.Floor(_activeS / 60.0);
+            var slot = (int)(minute % _pinSlots);
             for (var i = 0; i < n; i++)
             {
                 var pinned = _y[i] >= p.SatLevel;
                 var shortRun = !pinned && _satRun[i] > 0.0 && _satRun[i] < p.SatRunMaxS;
                 _satShort[i] = _satShort[i] * w + (shortRun ? _satRun[i] : 0.0);
+                _satNew[i] = _satNew[i] + (shortRun ? _satRun[i] : 0.0);
+                if (shortRun)
+                {
+                    _pinMin[i * _pinSlots + slot] = minute;
+                }
+
                 _satRun[i] = pinned ? _satRun[i] + adt : 0.0;
-                _aboveAcc[i] = _aboveAcc[i] * w + (_above[i] ? adt : 0.0);
+                var busy = p.GuardBusyLevel <= 0.0 ? _above[i] : _y[i] >= p.GuardBusyLevel;
+                _aboveAcc[i] = _aboveAcc[i] * w + (busy ? adt : 0.0);
             }
         }
 
@@ -428,8 +444,8 @@ public sealed class AdaptiveCalibrator
                 var q50 = Quantile(i, 0.5);
                 var ok = (q50 - q05) <= p.RestMaxSpread;
                 var sig = LowerHalfMad(i, q25, q50, width) * 1.4826;
-                _b[i] = ok ? q05 : _b0[i];
-                _sigma[i] = Math.Max(ok ? sig : _sigma0[i], p.SigmaFloor);
+                _b[i] = Math.Min(ok ? q05 : _b0[i], _b0[i] + p.RestMaxRise);
+                _sigma[i] = Math.Min(Math.Max(ok ? sig : _sigma0[i], p.SigmaFloor), p.SigmaMax);
             }
         }
 
@@ -516,12 +532,35 @@ public sealed class AdaptiveCalibrator
             if (_guardAcc >= p.GuardEveryS)
             {
                 _guardAcc = 0.0;
+                var since = Math.Floor(_activeS / 60.0) - p.GuardMinutes;
                 for (var i = 0; i < _n; i++)
                 {
                     var share = _satShort[i] / Math.Max(_aboveAcc[i], 1e-9);
-                    if (share > p.GuardShare && _aboveAcc[i] > 10.0)
+                    var hot = share > p.GuardShare && _aboveAcc[i] > 10.0;
+                    if (p.GuardNeedsNewPins)
+                    {
+                        hot &= _satNew[i] > 0.0;
+                    }
+
+                    if (p.GuardMinMinutes > 0)
+                    {
+                        // slots holding one of the last GuardMinutes active minutes = minutes with short pins
+                        var recent = 0;
+                        for (var s = 0; s < _pinSlots; s++)
+                        {
+                            if (_pinMin[i * _pinSlots + s] > since)
+                            {
+                                recent++;
+                            }
+                        }
+
+                        hot &= recent >= p.GuardMinMinutes;
+                    }
+
+                    if (hot)
                     {
                         _g[i] *= p.GuardStep;
+                        _satNew[i] = 0.0;
                     }
 
                     _g[i] = Math.Min(_g[i], _cHi[i] / _c[i]);
@@ -645,6 +684,17 @@ public sealed class AdaptiveCalibrator
         Array.Copy(old._peakV, _peakV, _peakV.Length);
         Array.Copy(old._peakT, _peakT, _peakT.Length);
         Array.Copy(old._peakN, _peakN, _n);
+        ClampRest();
+    }
+
+    // Rest and noise taken over from elsewhere (saved state, another calibrator) follow this one's limits right away.
+    private void ClampRest()
+    {
+        for (var i = 0; i < _n; i++)
+        {
+            _b[i] = Math.Min(_b[i], _b0[i] + _p.RestMaxRise);
+            _sigma[i] = Math.Min(Math.Max(_sigma[i], _p.SigmaFloor), _p.SigmaMax);
+        }
     }
 
     // ------------------------------------------------------------------------------------------------------ state
@@ -686,6 +736,7 @@ public sealed class AdaptiveCalibrator
         Flatten(s.PeakV, _peakV);
         Flatten(s.PeakT, _peakT);
         s.PeakN.CopyTo(_peakN, 0);
+        ClampRest(); // e.g. state saved before SigmaMax existed
         return true;
     }
 

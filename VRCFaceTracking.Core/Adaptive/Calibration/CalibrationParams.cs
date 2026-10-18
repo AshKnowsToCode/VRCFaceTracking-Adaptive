@@ -33,6 +33,14 @@ public sealed record CalibrationParams
     public double RestMaxSpread { get; init; } = 0.25;
     public double DeadzoneK { get; init; } = 3.0;
     public double SigmaFloor { get; init; } = 0.002;
+    /// <summary>
+    /// Upper bound of the learned noise (deadzone &lt;= 3x this). When a shape is rarely at rest the lower-half MAD
+    /// measures the face, not the sensor: social sessions learned 0.04-0.10 for smile, upper lip, dimple and jaw and the
+    /// deadzones ate gentle expressions (2026-10-13..17); Quest Pro noise at rest is &lt;= 0.016.
+    /// </summary>
+    public double SigmaMax { get; init; } = 0.01;
+    /// <summary> The rest level rises at most this far above its prior (a face held for minutes must not become neutral). </summary>
+    public double RestMaxRise { get; init; } = 0.05;
     /// <summary> Quantiles, ceilings and the guardrail are recomputed on this active cadence. </summary>
     public double UpdateEveryS { get; init; } = 0.5;
 
@@ -76,6 +84,20 @@ public sealed record CalibrationParams
     public double GuardShare { get; init; } = 0.03;
     public double GuardStep { get; init; } = 1.05;
     public double GuardEveryS { get; init; } = 30.0;
-    /// <summary> The guardrail factor relaxes back to 1 over 10 active hours. </summary>
-    public double GuardHalfLifeS { get; init; } = 36000.0;
+    /// <summary> The guardrail factor relaxes back to 1 over about an active hour (10 h kept old calming for days). </summary>
+    public double GuardHalfLifeS { get; init; } = 3600.0;
+    /// <summary>
+    /// A step needs short pins since the previous step: the share is a 10-minute memory, so one burst kept stepping every
+    /// 30 s on the same evidence (mouth press 1.0 -> 1.37 on 2026-10-17, no new pin after the first step).
+    /// </summary>
+    public bool GuardNeedsNewPins { get; init; } = true;
+    /// <summary> Short pins needed in at least this many different active minutes of the last <see cref="GuardMinutes"/> (0 = off). </summary>
+    public int GuardMinMinutes { get; init; } = 3;
+    public int GuardMinutes { get; init; } = 10;
+    /// <summary>
+    /// The share of short pins is measured against the time the shape is shown at &gt;= this level (0 = time above the
+    /// episode threshold, the old rule). That threshold includes 4 sigma, so with <see cref="SigmaMax"/> it fell from ~0.4
+    /// to ~0.1 for busy shapes and diluted the share (dimple / upper lip pinned in laughs).
+    /// </summary>
+    public double GuardBusyLevel { get; init; } = 0.5;
 }

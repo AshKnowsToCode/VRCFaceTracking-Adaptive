@@ -25,6 +25,15 @@ python evaluate.py --priors priors/NAME.json --known-good LocalSettings.json [--
 - `adaptive_v0.py` - the v0 calibrator: `AdaptiveCalibrator(Priors).step(t, x) -> y`. Golden reference for the C#
   port (`VRCFaceTracking.Core/Adaptive/Calibration/AdaptiveCalibrator.cs`); change both together. Priors may carry an optional
   `c_max` (upper limit for the learned ceiling above c0 x 1.6; a kept guided calibration stores the value before it).
+- `chain_replay.py` - replays app runs back to back the way the app ran them (fresh calibrator + saved state at every
+  start), from an app state file or daily snapshot, and compares calibrator variants side by side (parallel):
+  `python chain_replay.py --state SNAP.json --priors personal-X.json [--skip-active 60] SESSION.vftrec ...
+  [--check LATER_SNAP.json] [--variant NAME[:k=v,...]] [--inject pucker_burst@3600] [--cache DIR] [--report OUT.md]`.
+  `--check` compares with states the app saved later (2026-10-18: ceilings 8e-5, rest / noise / held peaks identical
+  over 7.35 active h and three restarts). Variant `v0-2026-10-13` = the calibrator the app ran 10-11..10-18;
+  `current` = `adaptive_v0.Params()`. Metrics include shown vs raw across the middle of the range (pinning and
+  p95 / p99.5 missed the 10-13 deadzone growth) and guardrail steps without new pins. About a minute per 100 minutes
+  of recording per variant; `--cache` on a drive with room (a 10 h session decodes to ~1 GB).
 - `golden_v0.py` - golden test of the C# port: `python golden_v0.py REC.vftrec ... [--priors P] [--module NAME]
   [--split 0.5]` builds `AdaptiveReplay/` (a console that replays a .vftrec through the C# calibrator), runs both and
   requires every output, the per-frame gate and the final ceilings to match (tolerance 1e-4; bit-exact so far).
@@ -97,7 +106,9 @@ down (`stop exit`): a Windows shutdown ends the app before process exit; after "
 a new file of the same session 10 s later.
 Adaptive Calibration: `adaptive:priors <name>; learned <s> active s|no learned state` (the calibrator (re)started on
 these starting values), `adaptive:guided applied <name>` (a kept guided run replaced them), `adaptive:reset <name>`,
-`adaptive:forgot guided <file>`, `adaptive:learning paused|paused for the guided calibration|on`, `adaptive:faulted`.
+`adaptive:forgot guided <file>`, `adaptive:learning paused|paused for the guided calibration|on`, `adaptive:faulted`,
+and every 60 active s what moved since it was last logged: `adaptive:ceiling|guard|deadzone <expression> <old> -> <new>`
+(ceiling or guard factor by >= 4%, deadzone by >= 0.01; the app log gets one "Adaptive Calibration learned:" line).
 Guided calibration: `guided:start <module>; <n> steps`, `guided:pose|retry|redo <pose>` (a step begins),
 `guided:filled <pose> <s>`, `guided:ask <pose> <reason>`, `guided:resumed <pose>`, `guided:skip <pose>`,
 `guided:pause|unpause`, `guided:summary`, `guided:summary after redo`, `guided:redo stopped <pose>`, `guided:stop`,

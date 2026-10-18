@@ -45,6 +45,14 @@ class Params:
     rest_max_spread: float = 0.25  # Q50 - Q05 above this -> not a rest-dominated shape, keep priors
     deadzone_k: float = 3.0
     sigma_floor: float = 0.002
+    # The lower-half MAD measures the face, not the sensor, when a shape is rarely at rest: in nov-ash's social sessions
+    # (2026-10-13..17, whole mouth at rest in ~1% of frames) smile, upper lip, dimple and jaw learned 0.04-0.10, and the
+    # deadzones (up to 0.29 raw) ate gentle expressions. Quest Pro noise at rest is <= 0.016. So the noise is bounded
+    # like every other learned value (deadzone <= 0.03).
+    sigma_max: float = 0.01
+    # The rest level rises at most this far above its prior: a face held for most of 10+ minutes would otherwise
+    # become the new neutral and fade.
+    rest_max_rise: float = 0.05
     update_every_s: float = 0.5  # quantiles, ceilings and guardrail are recomputed on this active cadence
 
     # 6.3 ceiling
@@ -82,7 +90,18 @@ class Params:
     guard_share: float = 0.03
     guard_step: float = 1.05
     guard_every_s: float = 30.0
-    guard_half_life_s: float = 36000.0  # g relaxes back to 1 over 10 active hours
+    guard_half_life_s: float = 3600.0  # g relaxes back to 1 over about an active hour (10 h kept old calming for days)
+    # A step needs short pins since the previous step: the share is a 10-minute memory, so one burst kept stepping
+    # every 30 s on the same evidence (mouth press 1.0 -> 1.37 on 2026-10-17, no new pin after the first step) ...
+    guard_needs_new_pins: bool = True
+    # ... and short pins in at least guard_min_minutes different active minutes of the last guard_minutes (0 = off).
+    guard_min_minutes: int = 3
+    guard_minutes: int = 10
+    # The share of short pins is measured against the time the shape is shown at >= this level (0 = time above theta,
+    # the old rule). Theta includes 4 sigma, so once sigma was capped it fell from ~0.4 to ~0.1 for busy shapes and the
+    # share got diluted: dimple / upper lip pinned in laughs (2026-10-13 replay: added pinning 0.89% -> 1.12% of
+    # talking frames with theta, 0.62% with 0.5).
+    guard_busy_level: float = 0.5
 
 
 @dataclass
@@ -154,7 +173,7 @@ class AdaptiveCalibrator:
         self.c = self.c0.copy()
         self.g = np.ones(n)
         self.b = priors.b0.copy()
-        self.sigma = np.maximum(priors.sigma0, p.sigma_floor)
+        self.sigma = np.clip(priors.sigma0, p.sigma_floor, p.sigma_max)
         self.hist = np.zeros((n, p.hist_bins))
         self.hist_n = 0.0  # decayed sample count (same for every shape)
         self.peak_v = np.zeros((n, p.peaks_keep))
@@ -178,7 +197,10 @@ class AdaptiveCalibrator:
         self._ep_bad = np.zeros(n, dtype=bool)
         self._sat_run = np.zeros(n)  # current pinned run length, active seconds
         self._sat_short = np.zeros(n)  # decayed seconds spent in short pinned runs
-        self._above = np.zeros(n)  # decayed seconds above theta
+        self._above = np.zeros(n)  # decayed seconds busy (shown >= guard_busy_level, or above theta)
+        self._sat_new = np.zeros(n)  # seconds in short pinned runs since this shape's last guardrail step
+        # active minute of the latest short pin per slot (slot = minute % guard_minutes); -1e9 = none
+        self._pin_min = np.full((n, max(p.guard_minutes, 1)), -1e9)
         self._guard_acc = 0.0
         self.gated = False
         self.h = np.zeros(n)
@@ -259,8 +281,13 @@ class AdaptiveCalibrator:
             run_end = (~pinned) & (self._sat_run > 0)
             short = run_end & (self._sat_run < p.sat_run_max_s)
             self._sat_short = self._sat_short * w + np.where(short, self._sat_run, 0.0)
+            self._sat_new = self._sat_new + np.where(short, self._sat_run, 0.0)
+            if short.any():
+                minute = math.floor(self.active_s / 60.0)
+                self._pin_min[short, minute % self._pin_min.shape[1]] = minute
             self._sat_run = np.where(pinned, self._sat_run + adt, 0.0)
-            self._above = self._above * w + np.where(above, adt, 0.0)
+            busy = above if p.guard_busy_level <= 0 else (y >= p.guard_busy_level)
+            self._above = self._above * w + np.where(busy, adt, 0.0)
 
         # periodic learning
         if not gated:
@@ -300,8 +327,8 @@ class AdaptiveCalibrator:
             q05, q25, q50 = self._quantiles((p.rest_q, 0.25, 0.5))
             ok = (q50 - q05) <= p.rest_max_spread
             sig = self._lower_half_mad(q25, q50) * 1.4826
-            self.b = np.where(ok, q05, self.pr.b0)
-            self.sigma = np.maximum(np.where(ok, sig, self.pr.sigma0), p.sigma_floor)
+            self.b = np.minimum(np.where(ok, q05, self.pr.b0), self.pr.b0 + p.rest_max_rise)
+            self.sigma = np.clip(np.where(ok, sig, self.pr.sigma0), p.sigma_floor, p.sigma_max)
 
         # 6.3 ceilings
         # log(1 + x), not log1p: .NET has no true log1p, and the C# port must match bit for bit (golden_v0.py)
@@ -335,7 +362,14 @@ class AdaptiveCalibrator:
                 self._guard_acc = 0.0
                 share = self._sat_short / np.maximum(self._above, 1e-9)
                 hot = (share > p.guard_share) & (self._above > 10.0)
+                if p.guard_needs_new_pins:
+                    hot &= self._sat_new > 0.0
+                if p.guard_min_minutes > 0:
+                    # slots holding one of the last guard_minutes active minutes = minutes with short pins
+                    recent = self._pin_min > math.floor(self.active_s / 60.0) - p.guard_minutes
+                    hot &= recent.sum(axis=1) >= p.guard_min_minutes
                 self.g = np.where(hot, self.g * p.guard_step, self.g)
+                self._sat_new = np.where(hot, 0.0, self._sat_new)
                 self.g = np.minimum(self.g, self.c_hi / self.c)
 
     def _quantiles(self, qs):
@@ -377,3 +411,6 @@ class AdaptiveCalibrator:
             setattr(self, k, np.array(s[k], float))
         self.hist_n = s["hist_n"]
         self.peak_n = np.array(s["peak_n"], int)
+        # state saved under older limits (e.g. before sigma_max) follows the current ones from the first frame
+        self.b = np.minimum(self.b, self.pr.b0 + self.p.rest_max_rise)
+        self.sigma = np.clip(self.sigma, self.p.sigma_floor, self.p.sigma_max)

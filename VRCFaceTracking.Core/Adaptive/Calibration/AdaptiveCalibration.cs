@@ -65,6 +65,10 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
     private bool _faulted;
     private int _saving;
     private bool _exitHooked;
+    // ceiling, guard factor and deadzone last written to the log, per expression (null until the first frame)
+    private double[]? _loggedC;
+    private double[]? _loggedG;
+    private double[]? _loggedD;
 
     public AdaptiveCalibration()
     {
@@ -156,6 +160,7 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
                 {
                     _lastSaveActiveS = cal.ActiveSeconds;
                     SaveNow(blocking: false);
+                    LogChanges();
                 }
             }
         }
@@ -249,12 +254,74 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
         }
 
         _lastSaveActiveS = _cal.ActiveSeconds;
+        RememberLogged();
         Logger?.LogInformation(
             "Adaptive Calibration: priors {Priors} for {Module}; {State}.", _cal.Priors.Name, key,
             loaded ? $"learned state loaded ({_cal.ActiveSeconds / 3600.0:0.0} active h)" : "no learned state yet");
         SessionRecorder.LogEvent("adaptive", $"priors {_cal.Priors.Name}; " + (loaded
             ? string.Create(CultureInfo.InvariantCulture, $"learned {_cal.ActiveSeconds:0.0} active s")
             : "no learned state"));
+    }
+
+    // Caller holds _lock. The values in use now become the baseline for LogChanges (no events).
+    private void RememberLogged()
+    {
+        var cal = _cal!;
+        var n = cal.Count;
+        _loggedC = Enumerable.Range(0, n).Select(cal.Ceiling).ToArray();
+        _loggedG = Enumerable.Range(0, n).Select(cal.Guard).ToArray();
+        _loggedD = Enumerable.Range(0, n).Select(i => cal.Params.DeadzoneK * cal.Noise(i)).ToArray();
+    }
+
+    // Caller holds _lock. Every 60 active s: what moved since it was last logged goes to the recording (adaptive:ceiling,
+    // adaptive:guard, adaptive:deadzone) and one app-log line. Ceiling or guard factor by >= 4% (one guardrail step is
+    // 5%), deadzone by >= 0.01. Without this, drift and the 2026-10-13 deadzone growth were only visible in a replay.
+    private void LogChanges()
+    {
+        var cal = _cal!;
+        if (_loggedC == null || _loggedG == null || _loggedD == null)
+        {
+            RememberLogged();
+            return;
+        }
+
+        StringBuilder? summary = null;
+        void Note(string what, int i, double old, double now)
+        {
+            var text = string.Create(CultureInfo.InvariantCulture,
+                $"{what} {cal.Priors.Expressions[i]} {old:0.000} -> {now:0.000}");
+            SessionRecorder.LogEvent("adaptive", text);
+            summary = summary == null ? new StringBuilder(text) : summary.Append("; ").Append(text);
+        }
+
+        for (var i = 0; i < cal.Count; i++)
+        {
+            var c = cal.Ceiling(i);
+            var g = cal.Guard(i);
+            var d = cal.Params.DeadzoneK * cal.Noise(i);
+            if (Math.Abs(c / _loggedC[i] - 1.0) >= 0.04)
+            {
+                Note("ceiling", i, _loggedC[i], c);
+                _loggedC[i] = c;
+            }
+
+            if (Math.Abs(g / _loggedG[i] - 1.0) >= 0.04)
+            {
+                Note("guard", i, _loggedG[i], g);
+                _loggedG[i] = g;
+            }
+
+            if (Math.Abs(d - _loggedD[i]) >= 0.01)
+            {
+                Note("deadzone", i, _loggedD[i], d);
+                _loggedD[i] = d;
+            }
+        }
+
+        if (summary != null)
+        {
+            Logger?.LogInformation("Adaptive Calibration learned: {Changes}", summary.ToString());
+        }
     }
 
     public static string PersonalPriorsPath(string moduleKey) =>
@@ -312,6 +379,7 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
             }
 
             _lastSaveActiveS = 0.0;
+            RememberLogged();
             Logger?.LogInformation("Adaptive Calibration now starts from your guided calibration ({Priors}).", priors.Name);
             SessionRecorder.LogEvent("adaptive", "guided applied " + priors.Name);
         }
@@ -438,6 +506,7 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
 
             _cal = new AdaptiveCalibrator(_cal.Priors, _cal.Params);
             _lastSaveActiveS = 0.0;
+            RememberLogged();
             Logger?.LogInformation("Adaptive Calibration is back to the starting values of {Priors} (old state kept in snapshots).", _cal.Priors.Name);
             SessionRecorder.LogEvent("adaptive", "reset " + _cal.Priors.Name);
         }
