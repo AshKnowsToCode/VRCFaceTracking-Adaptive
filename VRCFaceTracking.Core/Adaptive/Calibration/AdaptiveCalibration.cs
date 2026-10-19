@@ -69,6 +69,8 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
     private double[]? _loggedC;
     private double[]? _loggedG;
     private double[]? _loggedD;
+    private int _loggedOcclMoments;
+    private double _loggedOcclSeconds;
 
     public AdaptiveCalibration()
     {
@@ -271,6 +273,8 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
         _loggedC = Enumerable.Range(0, n).Select(cal.Ceiling).ToArray();
         _loggedG = Enumerable.Range(0, n).Select(cal.Guard).ToArray();
         _loggedD = Enumerable.Range(0, n).Select(i => cal.Params.DeadzoneK * cal.Noise(i)).ToArray();
+        _loggedOcclMoments = cal.OcclusionMoments;
+        _loggedOcclSeconds = cal.OcclusionPausedSeconds;
     }
 
     // Caller holds _lock. Every 60 active s: what moved since it was last logged goes to the recording (adaptive:ceiling,
@@ -316,6 +320,18 @@ public class AdaptiveCalibration : TrackingMutation, IMutationTeardownHandler
                 Note("deadzone", i, _loggedD[i], d);
                 _loggedD[i] = d;
             }
+        }
+
+        // occlusion gate (cup, hand or food at the mouth): how often it kept data out of learning since the last line
+        var moments = cal.OcclusionMoments - _loggedOcclMoments;
+        if (moments > 0)
+        {
+            var text = string.Create(CultureInfo.InvariantCulture,
+                $"occlusion {moments} moments, {cal.OcclusionPausedSeconds - _loggedOcclSeconds:0.0} s learning paused");
+            SessionRecorder.LogEvent("adaptive", text);
+            summary = summary == null ? new StringBuilder(text) : summary.Append("; ").Append(text);
+            _loggedOcclMoments = cal.OcclusionMoments;
+            _loggedOcclSeconds = cal.OcclusionPausedSeconds;
         }
 
         if (summary != null)

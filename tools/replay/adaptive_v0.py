@@ -24,6 +24,31 @@ import numpy as np
 
 LN2 = math.log(2.0)
 
+# Expressions that pull against each other (FACS antagonists, left/right of one movement): both sides high at once is no
+# face. Each group is averaged. Chosen on nov-ash's data (2026-10-18): every pair is 0 at 0.5 in the quiet 10-12 evening
+# and in every pose of both pose sessions; smile + pucker and jaw + press catch the drinking faces, the rest cost
+# nothing and cover other occlusions. Left out: jaw + chin raise (the genuine "lips pressed, jaw half open" pose reads
+# 0.53) and eye wide + squint (fires in normal use).
+_L, _R = "Left", "Right"
+_PUCKER = ["LipPuckerUpper" + _L, "LipPuckerUpper" + _R, "LipPuckerLower" + _L, "LipPuckerLower" + _R]
+_FUNNEL = ["LipFunnelUpper" + _L, "LipFunnelUpper" + _R, "LipFunnelLower" + _L, "LipFunnelLower" + _R]
+_SUCK = ["LipSuckUpper" + _L, "LipSuckUpper" + _R, "LipSuckLower" + _L, "LipSuckLower" + _R]
+_SMILE = ["MouthCornerPull" + _L, "MouthCornerPull" + _R]
+_STRETCH = ["MouthStretch" + _L, "MouthStretch" + _R]
+OCCLUSION_PAIRS = [
+    (_SMILE, _PUCKER), (_SMILE, _FUNNEL), (_SMILE, ["MouthFrown" + _L, "MouthFrown" + _R]),
+    (_STRETCH, _PUCKER), (_STRETCH, _FUNNEL),
+    (["JawOpen"], ["MouthPress" + _L, "MouthPress" + _R]),
+    (["MouthRaiserLower"], ["MouthLowerDown" + _L, "MouthLowerDown" + _R]),
+    (_SUCK, _PUCKER), (_SUCK, _FUNNEL),
+    (["CheekPuff" + _L, "CheekPuff" + _R], ["CheekSuck" + _L, "CheekSuck" + _R]),
+    (["MouthUpperLeft"], ["MouthUpperRight"]), (["JawLeft"], ["JawRight"]),
+    # Not antagonists, but never seen together outside drinking on nov-ash's Quest Pro: sipping reads pucker ~1.0 + chin
+    # raiser ~1.0 (+ press ~0.7); his pucker pose has chin raiser <= 0.12 and his pout pose pucker <= 0.20 (0.000% of
+    # the quiet 10-12 evening at 0.8). Person/headset evidence: re-check with other people's data.
+    (_PUCKER, ["MouthRaiserUpper", "MouthRaiserLower"]),
+]
+
 
 @dataclass
 class Params:
@@ -35,6 +60,13 @@ class Params:
     jump_pause_s: float = 1.0
     recover_s: float = 2.0  # learning stays off this long after zeros / frozen end
     max_frame_dt: float = 0.1  # the active clock never advances more than this per frame
+    # Occlusion: something in front of the mouth cameras (a cup, a hand, food) makes the tracker read faces no face can
+    # make (drinking on 2026-10-17: chin raiser 1.0 + pucker 0.7 + smile 0.7 + press 0.6 with the jaw open). When both
+    # sides of an opposing pair (OCCLUSION_PAIRS, held signal) are >= occlusion_level, learning pauses for
+    # occlusion_pause_s; the output is unchanged. 0 = off. Without it, drinking made press, chin raisers and pucker
+    # calmer for hours; with it all 40 drinking moments of 10-17 are caught, 0.05-1.6% of learning time paused.
+    occlusion_level: float = 0.5
+    occlusion_pause_s: float = 2.0
 
     # 6.2 rest and noise
     hist_bins: int = 200
@@ -202,13 +234,17 @@ class AdaptiveCalibrator:
         # active minute of the latest short pin per slot (slot = minute % guard_minutes); -1e9 = none
         self._pin_min = np.full((n, max(p.guard_minutes, 1)), -1e9)
         self._guard_acc = 0.0
+        self._occl_until = -math.inf
         self.gated = False
+        self.occluded = False  # the last frame looked occluded (diagnostics)
         self.h = np.zeros(n)
 
         # coupled shapes: child index -> (parent index, ratio)
         ix = {nm: i for i, nm in enumerate(self.names)}
         self.coupled = {ix[ch]: (ix[v["parent"]], float(v["ratio"]))
                         for ch, v in priors.coupled.items() if ch in ix and v["parent"] in ix}
+        self._occl_pairs = [(np.array([ix[x] for x in a]), np.array([ix[x] for x in b])) for a, b in OCCLUSION_PAIRS
+                            if all(x in ix for x in a + b)]
 
     # ------------------------------------------------------------------ frame
 
@@ -216,6 +252,12 @@ class AdaptiveCalibrator:
         p = self.p
         x = np.clip(np.nan_to_num(np.asarray(x_in, float), nan=0.0), 0.0, 1.0)
         nan_frame = bool(np.isnan(np.asarray(x_in, float)).any())
+
+        # held signal (rolling min over hold_s); needs no gating, and the occlusion check below uses it
+        self._ring_t[self._ring_i] = t
+        self._ring_x[self._ring_i] = x
+        self._ring_i = (self._ring_i + 1) % len(self._ring_t)
+        self.h = h = self._ring_x[self._ring_t >= t - p.hold_s].min(axis=0)
 
         # 6.1 gating
         if self._prev_x is None:
@@ -231,17 +273,18 @@ class AdaptiveCalibrator:
         if self._was_bad and not bad:
             self._pause_until = max(self._pause_until, t + p.recover_s)
         self._was_bad = bad
-        self.gated = gated = bad or t < self._pause_until
+        self.occluded = False
+        if p.occlusion_level > 0:
+            for a, b in self._occl_pairs:
+                if min(h[a].mean(), h[b].mean()) >= p.occlusion_level:
+                    self.occluded = True
+                    self._occl_until = max(self._occl_until, t + p.occlusion_pause_s)
+                    break
+        self.gated = gated = bad or t < self._pause_until or t < self._occl_until
         dt = min(max(t - self._prev_t, 0.0), p.max_frame_dt)
         self._prev_x, self._prev_t = x, t
         adt = 0.0 if gated else dt
         self.active_s += adt
-
-        # held signal (rolling min over hold_s)
-        self._ring_t[self._ring_i] = t
-        self._ring_x[self._ring_i] = x
-        self._ring_i = (self._ring_i + 1) % len(self._ring_t)
-        self.h = h = self._ring_x[self._ring_t >= t - p.hold_s].min(axis=0)
 
         if not gated:
             # 6.2 rest histogram, 20 Hz on the active clock

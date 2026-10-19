@@ -108,7 +108,9 @@ Adaptive Calibration: `adaptive:priors <name>; learned <s> active s|no learned s
 these starting values), `adaptive:guided applied <name>` (a kept guided run replaced them), `adaptive:reset <name>`,
 `adaptive:forgot guided <file>`, `adaptive:learning paused|paused for the guided calibration|on`, `adaptive:faulted`,
 and every 60 active s what moved since it was last logged: `adaptive:ceiling|guard|deadzone <expression> <old> -> <new>`
-(ceiling or guard factor by >= 4%, deadzone by >= 0.01; the app log gets one "Adaptive Calibration learned:" line).
+(ceiling or guard factor by >= 4%, deadzone by >= 0.01), and `adaptive:occlusion <n> moments, <s> s learning paused`
+when the occlusion gate (opposing expressions both >= 0.5: a cup, hand or food at the mouth) kept data out of learning;
+the app log gets one "Adaptive Calibration learned:" line.
 Guided calibration: `guided:start <module>; <n> steps`, `guided:pose|retry|redo <pose>` (a step begins),
 `guided:filled <pose> <s>`, `guided:ask <pose> <reason>`, `guided:resumed <pose>`, `guided:skip <pose>`,
 `guided:pause|unpause`, `guided:summary`, `guided:summary after redo`, `guided:redo stopped <pose>`, `guided:stop`,

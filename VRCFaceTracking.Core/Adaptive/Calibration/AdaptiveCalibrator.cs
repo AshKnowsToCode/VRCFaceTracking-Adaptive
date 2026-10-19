@@ -15,6 +15,27 @@ public sealed class AdaptiveCalibrator
 {
     private const int RingSize = 64;
 
+    // Occlusion gate (CalibrationParams.OcclusionLevel): expressions that pull against each other, so both sides high at
+    // once is no face but something in front of the mouth cameras (drinking on 2026-10-17). Each group is averaged. Same
+    // pairs and order as OCCLUSION_PAIRS in adaptive_v0.py, where the choice is explained.
+    private static readonly string[] Pucker = ["LipPuckerUpperLeft", "LipPuckerUpperRight", "LipPuckerLowerLeft", "LipPuckerLowerRight"];
+    private static readonly string[] Funnel = ["LipFunnelUpperLeft", "LipFunnelUpperRight", "LipFunnelLowerLeft", "LipFunnelLowerRight"];
+    private static readonly string[] Suck = ["LipSuckUpperLeft", "LipSuckUpperRight", "LipSuckLowerLeft", "LipSuckLowerRight"];
+    private static readonly string[] Smile = ["MouthCornerPullLeft", "MouthCornerPullRight"];
+    private static readonly string[] Stretch = ["MouthStretchLeft", "MouthStretchRight"];
+    private static readonly (string[] A, string[] B)[] OcclusionPairs =
+    [
+        (Smile, Pucker), (Smile, Funnel), (Smile, ["MouthFrownLeft", "MouthFrownRight"]),
+        (Stretch, Pucker), (Stretch, Funnel),
+        (["JawOpen"], ["MouthPressLeft", "MouthPressRight"]),
+        (["MouthRaiserLower"], ["MouthLowerDownLeft", "MouthLowerDownRight"]),
+        (Suck, Pucker), (Suck, Funnel),
+        (["CheekPuffLeft", "CheekPuffRight"], ["CheekSuckLeft", "CheekSuckRight"]),
+        (["MouthUpperLeft"], ["MouthUpperRight"]), (["JawLeft"], ["JawRight"]),
+        // not antagonists, but never seen together outside drinking on nov-ash's Quest Pro (sipping); re-check with others
+        (Pucker, ["MouthRaiserUpper", "MouthRaiserLower"]),
+    ];
+
     private readonly CalibrationParams _p;
     private readonly int _n;
     private readonly int _bins;
@@ -26,6 +47,8 @@ public sealed class AdaptiveCalibrator
     private readonly double[] _b0;
     private readonly double[] _sigma0;
     private readonly (int Child, int Parent, double Ratio)[] _coupled;
+    private readonly (int[] A, int[] B)[] _occlPairs;
+    private double _occlUntil = double.NegativeInfinity;
 
     // learned state (persisted)
     private double _activeS;
@@ -130,6 +153,11 @@ public sealed class AdaptiveCalibrator
             .Where(kv => index.ContainsKey(kv.Key) && index.ContainsKey(kv.Value.Parent))
             .Select(kv => (index[kv.Key], index[kv.Value.Parent], kv.Value.Ratio))
             .ToArray();
+
+        _occlPairs = OcclusionPairs
+            .Where(pair => pair.A.Concat(pair.B).All(index.ContainsKey))
+            .Select(pair => (pair.A.Select(s => index[s]).ToArray(), pair.B.Select(s => index[s]).ToArray()))
+            .ToArray();
     }
 
     public CalibrationPriors Priors { get; }
@@ -146,6 +174,15 @@ public sealed class AdaptiveCalibrator
 
     /// <summary> When false, frames are mapped with the current state but nothing is learned. </summary>
     public bool LearningEnabled { get; set; } = true;
+
+    /// <summary> The last frame looked occluded (opposing expressions both high). </summary>
+    public bool Occluded { get; private set; }
+
+    /// <summary> Occlusion pauses started since this calibrator was created (diagnostics, not saved). </summary>
+    public int OcclusionMoments { get; private set; }
+
+    /// <summary> Seconds of otherwise usable data the occlusion gate kept out of learning (diagnostics, not saved). </summary>
+    public double OcclusionPausedSeconds { get; private set; }
 
     /// <summary> Current ceiling divided by its prior, per expression (1 = unchanged, above 1 = calmer). </summary>
     public double CeilingRatio(int i) => _c[i] * _g[i] / _c0[i];
@@ -206,6 +243,27 @@ public sealed class AdaptiveCalibrator
             _x[i] = v < 0.0 ? 0.0 : v > 1.0 ? 1.0 : v;
         }
 
+        // held signal (rolling min over HoldS); needs no gating, and the occlusion check below uses it
+        _ringT[_ringI] = t;
+        Array.Copy(_x, 0, _ringX, _ringI * n, n);
+        _ringI = (_ringI + 1) % RingSize;
+        var cut = t - p.HoldS;
+        Array.Fill(_h, double.PositiveInfinity);
+        for (var r = 0; r < RingSize; r++)
+        {
+            if (_ringT[r] >= cut)
+            {
+                var row = r * n;
+                for (var i = 0; i < n; i++)
+                {
+                    if (_ringX[row + i] < _h[i])
+                    {
+                        _h[i] = _ringX[row + i];
+                    }
+                }
+            }
+        }
+
         // 6.1 gating
         if (_prevX == null)
         {
@@ -255,35 +313,38 @@ public sealed class AdaptiveCalibrator
         }
 
         _wasBad = bad;
-        var gated = bad || t < _pauseUntil;
+        Occluded = false;
+        if (p.OcclusionLevel > 0.0)
+        {
+            foreach (var (a, b) in _occlPairs)
+            {
+                if (Math.Min(Mean(_h, a), Mean(_h, b)) >= p.OcclusionLevel)
+                {
+                    Occluded = true;
+                    if (t >= _occlUntil)
+                    {
+                        OcclusionMoments++;
+                    }
+
+                    _occlUntil = Math.Max(_occlUntil, t + p.OcclusionPauseS);
+                    break;
+                }
+            }
+        }
+
+        var gated = bad || t < _pauseUntil || t < _occlUntil;
         Gated = gated;
         var dt = Math.Min(Math.Max(t - _prevT, 0.0), p.MaxFrameDt);
+        if (!bad && t >= _pauseUntil && t < _occlUntil)
+        {
+            OcclusionPausedSeconds += dt;
+        }
+
         Array.Copy(_x, _prevX, n);
         _prevT = t;
         var learn = !gated && LearningEnabled;
         var adt = learn ? dt : 0.0;
         _activeS += adt;
-
-        // held signal (rolling min over HoldS)
-        _ringT[_ringI] = t;
-        Array.Copy(_x, 0, _ringX, _ringI * n, n);
-        _ringI = (_ringI + 1) % RingSize;
-        var cut = t - p.HoldS;
-        Array.Fill(_h, double.PositiveInfinity);
-        for (var r = 0; r < RingSize; r++)
-        {
-            if (_ringT[r] >= cut)
-            {
-                var row = r * n;
-                for (var i = 0; i < n; i++)
-                {
-                    if (_ringX[row + i] < _h[i])
-                    {
-                        _h[i] = _ringX[row + i];
-                    }
-                }
-            }
-        }
 
         if (learn)
         {
@@ -371,6 +432,18 @@ public sealed class AdaptiveCalibrator
                 _updateAcc = 0.0;
             }
         }
+    }
+
+    // Same order of additions as numpy's mean on these short groups (sequential, then one division).
+    private static double Mean(double[] v, int[] idx)
+    {
+        var s = 0.0;
+        foreach (var i in idx)
+        {
+            s += v[i];
+        }
+
+        return s / idx.Length;
     }
 
     private void Map()

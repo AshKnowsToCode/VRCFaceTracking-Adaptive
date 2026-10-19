@@ -51,7 +51,7 @@ from adaptive_v0 import AdaptiveCalibrator, Params, Priors  # noqa: E402
 from vftrec import read_session  # noqa: E402
 
 LEGACY = dict(sigma_max=1.0, rest_max_rise=1.0, guard_half_life_s=36000.0, guard_needs_new_pins=False,
-              guard_min_minutes=0, guard_busy_level=0.0)
+              guard_min_minutes=0, guard_busy_level=0.0, occlusion_level=0.0)
 MOUTH = ("Jaw", "Mouth", "Lip", "Cheek", "Nose")
 SPEECH_DB = -60.0
 MID = ["MouthCornerPullRight", "MouthUpperUpRight", "MouthUpperUpLeft", "MouthDimpleLeft", "JawOpen",
@@ -129,6 +129,30 @@ def inject(kind: str, at: float, t: np.ndarray, X: np.ndarray, names: list[str])
     raise SystemExit(f"unknown --inject kind {kind!r}")
 
 
+def occlusion_zones(t, X, names, level=0.5, hold_s=0.15, pause_s=2.0):
+    """Frames within pause_s after an occlusion-like face (adaptive_v0.OCCLUSION_PAIRS on the held signal), from the
+    raw data alone, so every variant is measured on the same moments."""
+    from adaptive_v0 import OCCLUSION_PAIRS
+    ix = {n: i for i, n in enumerate(names)}
+    w = max(2, int(round(hold_s / np.median(np.diff(t)))))
+    H = X.copy()
+    for k in range(1, w):  # trailing rolling minimum
+        np.minimum(H[k:], X[:-k], out=H[k:])
+    hit = np.zeros(len(t), bool)
+    for a, b in OCCLUSION_PAIRS:
+        if all(n in ix for n in a + b):
+            hit |= np.minimum(H[:, [ix[n] for n in a]].mean(1), H[:, [ix[n] for n in b]].mean(1)) >= level
+    zone = np.zeros(len(t), bool)
+    starts = np.flatnonzero(hit)
+    if len(starts):
+        ends = np.searchsorted(t, t[starts] + pause_s)
+        delta = np.zeros(len(t) + 1, int)
+        np.add.at(delta, starts, 1)
+        np.add.at(delta, ends, -1)
+        zone = np.cumsum(delta)[:-1] > 0
+    return zone
+
+
 # ---------------------------------------------------------------------------------------------------------- replay
 
 class Traced(AdaptiveCalibrator):
@@ -176,12 +200,14 @@ def run_variant(job: dict) -> dict:
         Y = np.zeros((n, len(names)), np.float32)
         gated = np.ones(n, bool)
         dz_max = np.zeros(len(names))
+        occl = np.zeros(n, bool)  # frames whose learning the occlusion gate paused
         probes = []  # (session s, active s, c*g) every 5 active minutes, for recovery times
         next_probe = cal.active_s
         for f in range(f0, n):
             cal.t_now = t[f]
             Y[f] = cal.step(t[f], X[f])
             gated[f] = cal.gated
+            occl[f] = cal.gated and t[f] < cal._occl_until
             if cal.active_s >= next_probe:
                 next_probe = cal.active_s + 300.0
                 dz_max = np.maximum(dz_max, params.deadzone_k * cal.sigma)
@@ -189,8 +215,18 @@ def run_variant(job: dict) -> dict:
             while checks and cal.active_s >= checks[0]["active_s"] - 1e-6:
                 out["checks"].append(compare(cal, checks.pop(0), names, Path(path).name))
         state = cal.state()
-        out["sessions"].append(metrics(Path(path).name, names, t, X, Y, gated, at, adb, cal, start_cg, dz_max,
-                                       probes, injected, start_active))
+        # metrics on the same frames for every variant: what the occlusion gate paused still counts as worn
+        m = metrics(Path(path).name, names, t, X, Y, gated & ~occl, at, adb, cal, start_cg, dz_max, probes, injected,
+                    start_active)
+        zone = occlusion_zones(t, X, names)
+        wz = ~(gated & ~occl) & ~zone
+        loud = np.r_[0, np.cumsum(adb > SPEECH_DB)]
+        tz = wz & ((loud[np.searchsorted(at, t + 0.15)] - loud[np.searchsorted(at, t - 0.15)]) > 0)
+        mouth = [i for i, nm in enumerate(names) if nm.startswith(MOUTH)]
+        m["pinned_made_outside_occlusion"] = float(((Y[tz][:, mouth] >= 0.98) & (X[tz][:, mouth] < 0.9)).any(axis=1).mean()) if tz.any() else float('nan')
+        m["occlusion_share"] = float(occl.sum() / max(1, (~(gated & ~occl)).sum()))
+        m["occlusion_events"] = int(np.sum(np.diff(np.r_[0, occl.astype(np.int8)]) == 1))
+        out["sessions"].append(m)
         del Y, X
     while checks:
         out["checks"].append(compare(cal, checks.pop(0), names, "end"))
@@ -272,6 +308,7 @@ def report(results: list[dict]) -> str:
         row("pinned while talking: raw itself", lambda s: f"{s['pinned_raw'] * 100:.2f}%")
         row("pinned while talking: after calibrator", lambda s: f"{s['pinned'] * 100:.2f}%")
         row("pinned while talking: made by calibrator", lambda s: f"{s['pinned_made'] * 100:.2f}%")
+        row("  ... outside occlusion moments", lambda s: f"{s.get('pinned_made_outside_occlusion', float('nan')) * 100:.2f}%")
         row("  ... by shape", lambda s: ", ".join(f"{k} {v * 100:.2f}%" for k, v in s["made_by_shape"].items()) or "none")
         for nm in MID:
             row(f"{nm} shown at raw 0.1-0.2 / 0.2-0.3 / 0.3-0.4 / 0.5-0.6",
@@ -281,6 +318,8 @@ def report(results: list[dict]) -> str:
         row("largest deadzones", lambda s: ", ".join(f"{k} {v:.3f}" for k, v in s["deadzone_max"].items()))
         row("guardrail steps (without new pins)", lambda s: f"{s['guard_steps']} ({s['guard_steps_without_new_pins']})"
             + ("; " + ", ".join(f"{k} {v:.2f}" for k, v in s["guard_by_shape"].items()) if s["guard_by_shape"] else ""))
+        row("learning paused by the occlusion gate (share of worn time, events)",
+            lambda s: f"{s.get('occlusion_share', 0) * 100:.2f}%, {s.get('occlusion_events', 0)}")
         row("c x g moved > 5%", lambda s: ", ".join(f"{k} {a:.2f}->{b:.2f}" for k, (a, b) in sorted(s["moved"].items()))
             or "none")
         if s0["injected"]:

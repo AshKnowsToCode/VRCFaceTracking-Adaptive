@@ -20,6 +20,13 @@ public sealed record CalibrationParams
     public double RecoverS { get; init; } = 2.0;
     /// <summary> The active clock never advances more than this per frame. </summary>
     public double MaxFrameDt { get; init; } = 0.1;
+    /// <summary>
+    /// Occlusion: when both sides of an opposing expression pair read at least this (held signal), something is in front
+    /// of the mouth cameras (a cup, a hand, food) and learning pauses for <see cref="OcclusionPauseS"/>; the output is
+    /// unchanged. 0 = off. Drinking on 2026-10-17 had made press, chin raisers and pucker calmer for hours.
+    /// </summary>
+    public double OcclusionLevel { get; init; } = 0.5;
+    public double OcclusionPauseS { get; init; } = 2.0;
 
     // 6.2 rest and noise
     public int HistBins { get; init; } = 200;
